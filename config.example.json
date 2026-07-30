@@ -1,0 +1,79 @@
+{
+  "user": "desktop-assistant",
+  "hotkey": "ctrl+alt+space",
+  "active_profile_id": "cloud-mail",
+  "profiles": [
+    {
+      "id": "cloud-mail",
+      "name": "云端邮件助手",
+      "base_url": "https://api.dify.ai/v1",
+      "api_key": "app-请填写云端工作流API密钥",
+      "verify_tls": true
+    },
+    {
+      "id": "local-mail",
+      "name": "本地邮件助手",
+      "base_url": "https://192.168.1.100/v1",
+      "api_key": "app-请填写本地工作流API密钥",
+      "verify_tls": false
+    },
+    {
+      "id": "direct-llm",
+      "name": "直接调用 LLM 示例",
+      "base_url": "https://api.example.com/v1",
+      "api_key": "请填写 API Key",
+      "verify_tls": true,
+      "mode": "llm",
+      "model": "请填写模型名称"
+    }
+  ],
+  "actions": [
+    {
+      "id": "summarize",
+      "label": "总结",
+      "user_request": "总结"
+    },
+    {
+      "id": "reply",
+      "label": "回复",
+      "user_request": "回复"
+    },
+    {
+      "id": "draft",
+      "label": "代写",
+      "user_request": "代写"
+    },
+    {
+      "id": "polish",
+      "label": "润色",
+      "submenu": "polish"
+    },
+    {
+      "id": "grammar",
+      "label": "检查语法",
+      "user_request": "检查语法"
+    }
+  ],
+  "polish_options": [
+    {
+      "label": "提升表达清晰度",
+      "how_polish": "提升表达的清晰度"
+    },
+    {
+      "label": "缩短",
+      "how_polish": "缩短"
+    },
+    {
+      "label": "增长",
+      "how_polish": "增长"
+    },
+    {
+      "label": "简化",
+      "how_polish": "简化"
+    },
+    {
+      "label": "以我的语气重写",
+      "how_polish": "以我的语气重写"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+config.json
+__pycache__/
+*.py[cod]
+.superdesign/
+build/
+dist/
+
+# Local secrets and machine-specific configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python tooling
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Imported archives and generated installers
+chatbox-main.zip
+*.exe
+*.msi
+*.dmg
+*.AppImage
+
+# Chatbox dependencies, packaged applications, runtime profiles, and caches
+chatbox-ui/node_modules/
+chatbox-ui/release/
+chatbox-ui/.playwright-cli/
+chatbox-ui/storybook-static/
+chatbox-ui/coverage/
+chatbox-ui/tmp/
+chatbox-ui/logs/

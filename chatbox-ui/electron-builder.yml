@@ -1,0 +1,85 @@
+productName: NucWise AI
+appId: ai.nucwise.desktop
+asar: true
+asarUnpack:
+  - "**\\*.{node,dll}"
+  - "**/node_modules/libsql/**"
+files:
+  - "dist"
+  - "!**/*.map"
+  # - "!dist/**/stats.html"
+  - "node_modules"
+  - "!node_modules/@types"
+  - "!node_modules/undici-types"
+  - "package.json"
+
+beforePack: .erb/scripts/ensure-app-deps.cjs
+afterSign: .erb/scripts/notarize.js
+afterPack: .erb/scripts/patch-libsql.cjs
+
+# releaseInfo:
+#   releaseNotes: See the changelog for details
+
+mac:
+  notarize: false
+  category: public.app-category.developer-tools
+  target:
+    target: default
+    arch:
+      - arm64
+      - x64
+  type: distribution
+  hardenedRuntime: true
+  entitlements: assets/entitlements.mac.plist
+  entitlementsInherit: assets/entitlements.mac.plist
+  gatekeeperAssess: false
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+win:
+  icon: assets/nucwise-nid-icon-imagen-v1-transparent.ico
+  # This private portable build has no code-signing certificate. Skipping the no-op signing pass
+  # keeps packaging deterministic; Windows may still show its normal unsigned-app prompt.
+  signAndEditExecutable: false
+  target:
+    - target: portable
+      arch:
+        - x64
+  verifyUpdateCodeSignature: false
+  artifactName: ${productName}-${version}-Portable.${ext}
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+        - arm64
+    - target: deb
+      arch:
+        - x64
+        - arm64
+  category: Development
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+directories:
+  app: release/app
+  buildResources: assets
+  output: release/build
+
+extraResources:
+  - ./assets/**
+  - from: ../dist/DesktopAssistantTray.exe
+    to: assistant/DesktopAssistantTray.exe
+  - from: ../README.md
+    to: documentation/README.md
+  - from: ../CHATBOX_INTEGRATION.md
+    to: documentation/CHATBOX_INTEGRATION.md
+  - from: ./LICENSE
+    to: licenses/CHATBOX-GPL-3.0.txt

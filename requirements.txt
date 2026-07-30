@@ -1,0 +1,5 @@
+keyboard==0.13.5
+PyQt6==6.8.1
+pyperclip==1.9.0
+requests==2.32.3
+pyinstaller==6.12.0

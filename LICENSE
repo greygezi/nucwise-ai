@@ -1,0 +1,12 @@
+SPDX-License-Identifier: GPL-3.0-only
+
+This project is distributed under the GNU General Public License,
+version 3.
+
+The complete license text is included in:
+
+    chatbox-ui/LICENSE
+
+The Chatbox-based frontend is a modified GPL-3.0 work. When
+redistributing this project or derivative versions, preserve the
+applicable copyright notices, source availability, and GPL-3.0 terms.
