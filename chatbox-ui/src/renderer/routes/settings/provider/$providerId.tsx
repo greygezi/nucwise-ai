@@ -70,6 +70,7 @@ export const Route = createFileRoute('/settings/provider/$providerId')({
 type ModelTestResult = ModelTestState & {
   modelId: string
   modelName: string
+  modelType?: ProviderModelInfo['type']
 }
 
 const BUILTIN_API_HOST_PROVIDERS = new Set<string>([
@@ -294,6 +295,7 @@ function ProviderSettings({ providerId }: { providerId: string }) {
   )
   const isOAuthOnlyProvider = baseInfo?.id ? OAUTH_ONLY_PROVIDERS.has(baseInfo.id) : false
   const providerWebsite = baseInfo?.urls?.website || ''
+  const isOptionalApiKeyProvider = baseInfo?.id === ModelProviderEnum.Ollama
 
   const handleApiKeyChange = (e: ChangeEvent<HTMLInputElement>) => {
     setProviderSettings({
@@ -307,11 +309,18 @@ function ProviderSettings({ providerId }: { providerId: string }) {
     })
   }
 
-  const handleApiPathChange = (e: ChangeEvent<HTMLInputElement>) => {
+  const handleApiAddressChange = (e: ChangeEvent<HTMLInputElement>) => {
     setProviderSettings({
-      apiPath: e.currentTarget.value,
+      apiHost: e.currentTarget.value,
+      apiPath: '',
     })
   }
+  const customApiAddress = (() => {
+    const apiHost = (providerSettings?.apiHost || baseInfo?.defaultSettings?.apiHost || '').trim().replace(/\/$/, '')
+    const apiPath = (providerSettings?.apiPath ?? baseInfo?.defaultSettings?.apiPath ?? '').trim()
+    if (!apiPath || apiPath === '/' || apiHost.endsWith(apiPath)) return apiHost
+    return `${apiHost}${apiPath.startsWith('/') ? '' : '/'}${apiPath}`
+  })()
   const normalizedBuiltinApiHost = baseInfo
     ? normalizeAPIHost(
         {
@@ -412,14 +421,18 @@ function ProviderSettings({ providerId }: { providerId: string }) {
   }
 
   const handleCheckModel = async (model: ProviderModelInfo) => {
+    const modelType = model.type || 'chat'
     // Initialize result with model info
     const result: ModelTestResult = {
       modelId: model.modelId,
       modelName: model.nickname || model.modelId,
+      modelType,
       testing: true,
       basicTest: { status: 'pending' },
-      visionTest: { status: 'pending' },
-      toolTest: { status: 'pending' },
+      ...(modelType === 'chat' && {
+        visionTest: { status: 'pending' as const },
+        toolTest: { status: 'pending' as const },
+      }),
     }
     setModelTestResult(result)
 
@@ -429,6 +442,7 @@ function ProviderSettings({ providerId }: { providerId: string }) {
     const finalState = await testModelCapabilities({
       providerId,
       modelId: model.modelId,
+      modelType,
       settings: settingsStore.getState(),
       configs,
       dependencies,
@@ -493,9 +507,13 @@ function ProviderSettings({ providerId }: { providerId: string }) {
             <ScalableIcon icon={IconExternalLink} size={24} />
           </Button>
         )}
-        {(
+        {
           <PopoverConfirm
-            title={baseInfo.isCustom ? t('Confirm to delete this custom provider?') : '删除该模型提供方及其本地配置？可稍后通过“添加”恢复。'}
+            title={
+              baseInfo.isCustom
+                ? t('Confirm to delete this custom provider?')
+                : '删除该模型提供方及其本地配置？可稍后通过“添加”恢复。'
+            }
             confirmButtonColor="chatbox-error"
             onConfirm={() => {
               const { [baseInfo.id]: _removed, ...remainingProviders } = providersMap || {}
@@ -522,7 +540,7 @@ function ProviderSettings({ providerId }: { providerId: string }) {
               color="chatbox-error"
             ></Button>
           </PopoverConfirm>
-        )}
+        }
       </Flex>
       {baseInfo.isCustom && language === 'zh-Hans' && (
         <Flex>
@@ -669,50 +687,52 @@ function ProviderSettings({ providerId }: { providerId: string }) {
         )}
 
         {/* API Key */}
-        {!isOAuthOnlyProvider &&
-          ![ModelProviderEnum.Ollama, ModelProviderEnum.LMStudio, ModelProviderEnum.Bedrock, ''].includes(
-            baseInfo.id
-          ) && (
-            <Stack gap="xxs" style={isOAuthActive ? { opacity: 0.5 } : undefined}>
-              <Flex gap="xs" align="center">
-                <Text span fw="600">
-                  {t('API Key')}
+        {!isOAuthOnlyProvider && ![ModelProviderEnum.LMStudio, ModelProviderEnum.Bedrock, ''].includes(baseInfo.id) && (
+          <Stack gap="xxs" style={isOAuthActive ? { opacity: 0.5 } : undefined}>
+            <Flex gap="xs" align="center">
+              <Text span fw="600">
+                {isOptionalApiKeyProvider ? 'API Key（可选）' : t('API Key')}
+              </Text>
+              {isOAuthActive && (
+                <Text span size="xs" c="chatbox-tertiary">
+                  ({t('Using OAuth')})
                 </Text>
-                {isOAuthActive && (
-                  <Text span size="xs" c="chatbox-tertiary">
-                    ({t('Using OAuth')})
-                  </Text>
-                )}
-              </Flex>
-              <Flex gap="xs" align="center">
-                <PasswordInput
-                  flex={1}
-                  value={providerSettings?.apiKey || ''}
-                  onChange={handleApiKeyChange}
-                  disabled={isOAuthActive}
-                />
-                <Tooltip
-                  disabled={!!providerSettings?.apiKey && displayModels.length > 0}
-                  label={
-                    !providerSettings?.apiKey
-                      ? t('API Key is required to check connection')
-                      : displayModels.length === 0
-                        ? t('Add at least one model to check connection')
-                        : null
+              )}
+            </Flex>
+            <Flex gap="xs" align="center">
+              <PasswordInput
+                flex={1}
+                value={providerSettings?.apiKey || ''}
+                onChange={handleApiKeyChange}
+                disabled={isOAuthActive}
+                placeholder={isOptionalApiKeyProvider ? '本机免密可留空；远程或代理服务请填写' : undefined}
+              />
+              <Tooltip
+                disabled={(isOptionalApiKeyProvider || !!providerSettings?.apiKey) && displayModels.length > 0}
+                label={
+                  !isOptionalApiKeyProvider && !providerSettings?.apiKey
+                    ? t('API Key is required to check connection')
+                    : displayModels.length === 0
+                      ? t('Add at least one model to check connection')
+                      : null
+                }
+              >
+                <Button
+                  size="sm"
+                  disabled={
+                    isOAuthActive ||
+                    (!isOptionalApiKeyProvider && !providerSettings?.apiKey) ||
+                    displayModels.length === 0
                   }
+                  loading={modelTestResult?.testing || false}
+                  onClick={() => setShowTestModelSelector(true)}
                 >
-                  <Button
-                    size="sm"
-                    disabled={isOAuthActive || !providerSettings?.apiKey || displayModels.length === 0}
-                    loading={modelTestResult?.testing || false}
-                    onClick={() => setShowTestModelSelector(true)}
-                  >
-                    {t('Check')}
-                  </Button>
-                </Tooltip>
-              </Flex>
-            </Stack>
-          )}
+                  {t('Check')}
+                </Button>
+              </Tooltip>
+            </Flex>
+          </Stack>
+        )}
 
         {/* API Host */}
         {BUILTIN_API_HOST_PROVIDERS.has(baseInfo.id) && (
@@ -741,45 +761,18 @@ function ProviderSettings({ providerId }: { providerId: string }) {
 
         {baseInfo.isCustom && (
           <>
-            {/* custom provider api host & path */}
+            {/* custom provider API address */}
             <Stack gap="xs">
-              <Flex gap="sm">
-                <Stack gap="xxs" flex={3}>
-                  <Flex justify="space-between" align="flex-end" gap="md">
-                    <Text span fw="600" className=" whitespace-nowrap">
-                      {t('API Host')}
-                    </Text>
-                  </Flex>
-                  <Flex gap="xs" align="center">
-                    <TextInput
-                      flex={1}
-                      value={providerSettings?.apiHost}
-                      placeholder={baseInfo.defaultSettings?.apiHost}
-                      onChange={handleApiHostChange}
-                    />
-                  </Flex>
-                </Stack>
-
-                <Stack gap="xxs" flex={2}>
-                  <Flex justify="space-between" align="flex-end" gap="md">
-                    <Text span fw="600" className=" whitespace-nowrap">
-                      {t('API Path')}
-                    </Text>
-                  </Flex>
-                  <Flex gap="xs" align="center">
-                    <TextInput
-                      flex={1}
-                      value={providerSettings?.apiPath}
-                      onChange={handleApiPathChange}
-                      placeholder={normalizeAPIHost(providerSettings, baseInfo.type).apiPath}
-                    />
-                  </Flex>
-                </Stack>
+              <Flex justify="space-between" align="flex-end" gap="md">
+                <Text span fw="600" className=" whitespace-nowrap">
+                  {t('API Address')}
+                </Text>
               </Flex>
-              <Text span size="xs" flex="0 1 auto" c="chatbox-secondary">
-                {normalizeAPIHost(providerSettings, baseInfo.type).apiHost +
-                  normalizeAPIHost(providerSettings, baseInfo.type).apiPath}
-              </Text>
+              <TextInput
+                value={customApiAddress}
+                placeholder={baseInfo.defaultSettings?.apiHost}
+                onChange={handleApiAddressChange}
+              />
               {providerSettings?.apiHost?.includes('aihubmix.com') && (
                 <Flex align="center" gap={4}>
                   <ScalableIcon icon={IconDiscount2} size={14} color="var(--chatbox-tint-tertiary)" />
@@ -1167,48 +1160,52 @@ function ProviderSettings({ providerId }: { providerId: string }) {
                         <ScalableIcon icon={IconCircleCheck} color="var(--chatbox-tint-success)" />
                       </Flex>
                       {/* Vision Test */}
-                      <Flex align="center" gap="xs">
-                        <Text style={{ minWidth: '120px' }}>{t('Vision Request')}:</Text>
-                        {modelTestResult.visionTest?.status === 'success' ? (
-                          <ScalableIcon icon={IconCircleCheck} color="var(--chatbox-tint-success)" />
-                        ) : modelTestResult.visionTest?.status === 'error' ? (
-                          <Flex align="center" gap="xs" maw={400}>
-                            <Tooltip label={modelTestResult.visionTest.error} multiline>
-                              <ScalableIcon icon={IconX} className="cursor-help" color="var(--chatbox-tint-error)" />
-                            </Tooltip>
-                            <Text>{t('This model does not support vision')}</Text>
-                          </Flex>
-                        ) : (
-                          <Flex align="center" gap="xs">
-                            <Loader size="xs" />
-                            <Text c="chatbox-tertiary" size="sm">
-                              {t('Testing...')}
-                            </Text>
-                          </Flex>
-                        )}
-                      </Flex>
+                      {modelTestResult.modelType === 'chat' && (
+                        <Flex align="center" gap="xs">
+                          <Text style={{ minWidth: '120px' }}>{t('Vision Request')}:</Text>
+                          {modelTestResult.visionTest?.status === 'success' ? (
+                            <ScalableIcon icon={IconCircleCheck} color="var(--chatbox-tint-success)" />
+                          ) : modelTestResult.visionTest?.status === 'error' ? (
+                            <Flex align="center" gap="xs" maw={400}>
+                              <Tooltip label={modelTestResult.visionTest.error} multiline>
+                                <ScalableIcon icon={IconX} className="cursor-help" color="var(--chatbox-tint-error)" />
+                              </Tooltip>
+                              <Text>{t('This model does not support vision')}</Text>
+                            </Flex>
+                          ) : (
+                            <Flex align="center" gap="xs">
+                              <Loader size="xs" />
+                              <Text c="chatbox-tertiary" size="sm">
+                                {t('Testing...')}
+                              </Text>
+                            </Flex>
+                          )}
+                        </Flex>
+                      )}
 
                       {/* Tool Use Test */}
-                      <Flex align="center" gap="xs">
-                        <Text style={{ minWidth: '120px' }}>{t('Tool Use Request')}:</Text>
-                        {modelTestResult.toolTest?.status === 'success' ? (
-                          <ScalableIcon icon={IconCircleCheck} color="var(--chatbox-tint-success)" />
-                        ) : modelTestResult.toolTest?.status === 'error' ? (
-                          <Flex align="center" gap="xs" maw={400}>
-                            <Tooltip label={modelTestResult.toolTest.error} multiline>
-                              <ScalableIcon icon={IconX} className="cursor-help" color="var(--chatbox-tint-error)" />
-                            </Tooltip>
-                            <Text>{t('This model does not support tool use')}</Text>
-                          </Flex>
-                        ) : (
-                          <Flex align="center" gap="xs">
-                            <Loader size="xs" />
-                            <Text c="chatbox-tertiary" size="sm">
-                              {t('Testing...')}
-                            </Text>
-                          </Flex>
-                        )}
-                      </Flex>
+                      {modelTestResult.modelType === 'chat' && (
+                        <Flex align="center" gap="xs">
+                          <Text style={{ minWidth: '120px' }}>{t('Tool Use Request')}:</Text>
+                          {modelTestResult.toolTest?.status === 'success' ? (
+                            <ScalableIcon icon={IconCircleCheck} color="var(--chatbox-tint-success)" />
+                          ) : modelTestResult.toolTest?.status === 'error' ? (
+                            <Flex align="center" gap="xs" maw={400}>
+                              <Tooltip label={modelTestResult.toolTest.error} multiline>
+                                <ScalableIcon icon={IconX} className="cursor-help" color="var(--chatbox-tint-error)" />
+                              </Tooltip>
+                              <Text>{t('This model does not support tool use')}</Text>
+                            </Flex>
+                          ) : (
+                            <Flex align="center" gap="xs">
+                              <Loader size="xs" />
+                              <Text c="chatbox-tertiary" size="sm">
+                                {t('Testing...')}
+                              </Text>
+                            </Flex>
+                          )}
+                        </Flex>
+                      )}
                     </Flex>
                   </>
                 ) : modelTestResult.basicTest?.status === 'error' ? (

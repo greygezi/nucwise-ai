@@ -28,7 +28,7 @@ import {
   IconSettings,
   IconX,
 } from '@tabler/icons-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { cn } from '@/lib/utils'
 import { navigateToSettings } from '@/modals/Settings'
@@ -180,6 +180,7 @@ export default function DifyWorkflowComposer({
   const [loadingParameters, setLoadingParameters] = useState(true)
   const [running, setRunning] = useState(false)
   const [activeRunId, setActiveRunId] = useState<string>()
+  const activeRunIdRef = useRef<string>()
   const [status, setStatus] = useState('正在读取工作流输入要求…')
   const [error, setError] = useState('')
   const [collapsed, setCollapsed] = useState(false)
@@ -231,6 +232,7 @@ export default function DifyWorkflowComposer({
   useEffect(
     () =>
       difyClient.onRunEvent((event) => {
+        if (!activeRunIdRef.current || event.runId !== activeRunIdRef.current) return
         setActiveRunId(event.runId)
         setStatus(statusText(event.event, event.data))
       }),
@@ -258,9 +260,13 @@ export default function DifyWorkflowComposer({
     setRunning(true)
     setError('')
     setStatus('正在提交工作流…')
+    const runId = crypto.randomUUID()
+    activeRunIdRef.current = runId
+    setActiveRunId(runId)
     try {
       const request: DifyRunRequest = {
         profileId,
+        runId,
         inputs,
         query: query.trim() || undefined,
         conversationId,
@@ -280,6 +286,7 @@ export default function DifyWorkflowComposer({
       setStatus('执行失败')
     } finally {
       setRunning(false)
+      activeRunIdRef.current = undefined
       setActiveRunId(undefined)
     }
   }

@@ -8,10 +8,14 @@ import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import useNeedRoomForWinControls from '@/hooks/useNeedRoomForWinControls'
 import { useIsSmallScreen } from '@/hooks/useScreenChange'
-import { scheduleGenerateNameAndThreadName, scheduleGenerateThreadName } from '@/stores/sessionActions'
+import {
+  isAutoTitlePlaceholder,
+  scheduleGenerateNameAndThreadName,
+  scheduleGenerateThreadName,
+} from '@/stores/sessionActions'
 import * as settingActions from '@/stores/settingActions'
-import { useUIStore } from '@/stores/uiStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useUIStore } from '@/stores/uiStore'
 import Divider from '../common/Divider'
 import { ScalableIcon } from '../common/ScalableIcon'
 import Toolbar from './Toolbar'
@@ -52,7 +56,7 @@ export default function Header(props: { session: Session }) {
       return
     }
 
-    if (currentSession.name === 'Untitled') {
+    if (isAutoTitlePlaceholder(currentSession.name)) {
       scheduleGenerateNameAndThreadName(currentSession.id)
     } else if (!currentSession.threadName) {
       scheduleGenerateThreadName(currentSession.id)
@@ -63,7 +67,7 @@ export default function Header(props: { session: Session }) {
     if (!currentSession) {
       return
     }
-    NiceModal.show('session-settings', { session: currentSession })
+    void NiceModal.show('session-settings', { session: currentSession })
   }
 
   return (

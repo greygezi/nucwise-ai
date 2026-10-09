@@ -14,7 +14,7 @@ export function RouteComponent() {
     <Box p="md">
       <Title order={5}>{t('Skills')}</Title>
       <Text size="sm" c="dimmed" mt="xs">
-        {t('Enabled skills will be available in Task mode.')}
+        {t('Imported SKILL.md files are automatically matched to relevant conversations.')}
       </Text>
       <Box className="mt-8">
         <SkillsSection />

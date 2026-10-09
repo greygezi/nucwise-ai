@@ -16,8 +16,9 @@ export function buildImportedProviderSettingsUpdate(params: {
   existingProvider: ProviderInfo | null
   providers: Settings['providers'] | undefined
   customProviders: Settings['customProviders'] | undefined
+  hiddenProviderIds?: Settings['hiddenProviderIds']
 }): Partial<Settings> {
-  const { importedConfig, existingProvider, providers, customProviders } = params
+  const { importedConfig, existingProvider, providers, customProviders, hiddenProviderIds } = params
 
   const providerName =
     ('name' in importedConfig ? importedConfig.name : '') ||
@@ -61,12 +62,15 @@ export function buildImportedProviderSettingsUpdate(params: {
     throw new Error(`Custom provider "${providerId}" conflicts with a builtin provider ID`)
   }
 
-  if (existingProvider && !existingProvider.isCustom) {
+  if (isBuiltinProviderId(providerId)) {
     return {
       providers: {
         ...providers,
         [providerId]: providerSettings,
       },
+      ...(hiddenProviderIds?.includes(providerId)
+        ? { hiddenProviderIds: hiddenProviderIds.filter((id) => id !== providerId) }
+        : {}),
     }
   }
 

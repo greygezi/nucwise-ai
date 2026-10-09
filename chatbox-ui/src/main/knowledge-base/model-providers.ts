@@ -1,6 +1,6 @@
 import type { EmbeddingModel } from 'ai'
-import { CohereClient } from 'cohere-ai'
 import { getProviderSettings } from '../../shared/models'
+import { createRerankClient } from '../../shared/models/rerank'
 import type { CallChatCompletionOptions, ModelInterface } from '../../shared/models/types'
 import { getChatboxAPIOrigin } from '../../shared/request/chatboxai_pool'
 import { SessionSettingsSchema } from '../../shared/types'
@@ -273,11 +273,11 @@ export async function getRerankProvider(kbId: number) {
           apiHost = getChatboxAPIOrigin()
           token = store.get('settings.licenseKey')
         }
+        if (!token) {
+          throw new Error(`Missing token for rerank provider: ${providerId}`)
+        }
 
-        const client = new CohereClient({
-          environment: apiHost,
-          token,
-        })
+        const client = createRerankClient(apiHost, token)
         return { client, modelId }
       } catch (error: unknown) {
         const errMsg =

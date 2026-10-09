@@ -45,9 +45,9 @@ dmg:
 
 win:
   icon: assets/nucwise-nid-icon-imagen-v1-transparent.ico
-  # This private portable build has no code-signing certificate. Skipping the no-op signing pass
-  # keeps packaging deterministic; Windows may still show its normal unsigned-app prompt.
-  signAndEditExecutable: false
+  # Keep resource editing enabled even for the unsigned portable build so Windows
+  # file properties, Task Manager and system dialogs show the NucWise AI identity.
+  signAndEditExecutable: true
   target:
     - target: portable
       arch:
@@ -81,5 +81,9 @@ extraResources:
     to: documentation/README.md
   - from: ../CHATBOX_INTEGRATION.md
     to: documentation/CHATBOX_INTEGRATION.md
+  - from: ../nucwise-provider.defaults.internal.json
+    to: nucwise-provider.defaults.json
+  - from: ../nucwise-provider.defaults.example.json
+    to: documentation/nucwise-provider.defaults.example.json
   - from: ./LICENSE
     to: licenses/CHATBOX-GPL-3.0.txt

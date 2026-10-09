@@ -1,12 +1,12 @@
 import type { EmbeddingModel } from 'ai'
-import { CohereClient } from 'cohere-ai'
 import { getProviderSettings } from '../../shared/models'
+import { createRerankClient } from '../../shared/models/rerank'
 import { parseKnowledgeBaseModelString } from '../../shared/utils/knowledge-base-model-parser'
 import { sentry } from '../adapters/sentry'
 import { cache } from '../cache'
-import { getLogger } from '../util'
 import { createEmbeddingProviderFromModelString } from '../knowledge-base/model-providers'
 import { getSettings } from '../store-node'
+import { getLogger } from '../util'
 
 const log = getLogger('session-attachment-rag:model-providers')
 
@@ -77,10 +77,7 @@ export async function getSessionAttachmentRerankProvider(modelString?: string | 
           throw new Error(`Missing token for rerank provider: ${providerId}`)
         }
 
-        const client = new CohereClient({
-          environment: apiHost,
-          token,
-        })
+        const client = createRerankClient(apiHost, token)
         return { client, modelId }
       } catch (error) {
         log.error(`[MODEL] Failed to resolve session attachment rerank provider: ${modelString}`, error)

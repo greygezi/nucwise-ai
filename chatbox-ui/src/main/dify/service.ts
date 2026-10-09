@@ -3,14 +3,15 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { app, safeStorage, type WebContents } from 'electron'
 import { Agent } from 'undici'
-import type {
-  DifyHistoryEntry,
-  DifyInputField,
-  DifyProfile,
-  DifyProfileInput,
-  DifyRunEvent,
-  DifyRunRequest,
-  DifyRunResult,
+import {
+  DESKTOP_ASSISTANT_DEFAULT_CHAT,
+  type DifyHistoryEntry,
+  type DifyInputField,
+  type DifyProfile,
+  type DifyProfileInput,
+  type DifyRunEvent,
+  type DifyRunRequest,
+  type DifyRunResult,
 } from '../../shared/dify'
 import { getSettings, store } from '../store-node'
 
@@ -348,12 +349,19 @@ export function clearHistory() {
 
 export function getAssistantProfileId() {
   const configured = (store.get(ASSISTANT_PROFILE_KEY as never, '') || '') as string
-  return storedProfiles().some((profile) => profile.id === configured && profile.appType === 'workflow')
-    ? configured
-    : storedProfiles().find((profile) => profile.appType === 'workflow')?.id || ''
+  if (configured === DESKTOP_ASSISTANT_DEFAULT_CHAT) return ''
+  const profiles = storedProfiles()
+  if (configured) {
+    return profiles.some((profile) => profile.id === configured && profile.appType === 'workflow') ? configured : ''
+  }
+  return ''
 }
 
 export function setAssistantProfileId(profileId: string) {
+  if (profileId === DESKTOP_ASSISTANT_DEFAULT_CHAT) {
+    store.set(ASSISTANT_PROFILE_KEY as never, DESKTOP_ASSISTANT_DEFAULT_CHAT as never)
+    return ''
+  }
   const profile = storedProfiles().find((item) => item.id === profileId && item.appType === 'workflow')
   if (!profile) throw new Error('浮窗助手只能使用已保存的 Workflow 配置。')
   store.set(ASSISTANT_PROFILE_KEY as never, profileId as never)
@@ -362,7 +370,7 @@ export function setAssistantProfileId(profileId: string) {
 
 export async function run(request: DifyRunRequest, sender: WebContents): Promise<DifyRunResult> {
   const { profile, apiKey } = requireProfile(request.profileId)
-  const runId = randomUUID()
+  const runId = request.runId?.trim() || randomUUID()
   const controller = new AbortController()
   activeRuns.set(runId, controller)
   const user = request.user?.trim() || `desktop-assistant-${randomUUID()}`
@@ -397,67 +405,92 @@ export async function run(request: DifyRunRequest, sender: WebContents): Promise
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
-      const lines = buffer.split(/\r?\n/)
-      buffer = lines.pop() || ''
-      for (const line of lines) {
-        if (!line.startsWith('data:')) continue
-        let event: { event?: string; data?: Record<string, unknown>; [key: string]: unknown }
-        try {
-          event = JSON.parse(line.slice(5).trim())
-        } catch {
-          continue
-        }
-        const eventName = event.event || 'unknown'
-        const data = event.data && typeof event.data === 'object' ? event.data : event
-        emit(eventName, data)
-        if (eventName === 'node_finished') {
-          assistantExamples.push(...assistantPromptExamples(data))
-        }
-        if (eventName === 'message') chatAnswer += String(data.answer || '')
-        if (eventName === 'workflow_finished') {
-          const status = data.status === 'succeeded' ? 'succeeded' : 'failed'
-          const outputs = (data.outputs || {}) as Record<string, unknown>
-          const output = outputText(outputs)
-          finalResult = isPromptEcho(output, assistantExamples)
-            ? {
-                runId,
-                status: 'failed',
-                outputs,
-                output: '',
-                error:
-                  'Dify 的 LLM 节点返回了 Prompt 中预设的 assistant 示例，而不是本次运行结果。请删除该节点的 assistant 示例消息后重试。',
+    let streamDone = false
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        streamDone = done
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+        const lines = buffer.split(/\r?\n/)
+        // Some self-hosted Dify/reverse-proxy combinations close the SSE stream
+        // immediately after the final `data:` record without a trailing newline.
+        // On EOF the remaining fragment is a complete line and must be parsed.
+        buffer = done ? '' : lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue
+          let event: { event?: string; data?: Record<string, unknown>; [key: string]: unknown }
+          try {
+            event = JSON.parse(line.slice(5).trim())
+          } catch {
+            continue
+          }
+          const eventName = event.event || 'unknown'
+          const data = event.data && typeof event.data === 'object' ? event.data : event
+          emit(eventName, data)
+          if (eventName === 'node_finished') {
+            assistantExamples.push(...assistantPromptExamples(data))
+          }
+          if (eventName === 'message') chatAnswer += String(data.answer || '')
+          if (eventName === 'workflow_finished' && !isChat) {
+            const status = data.status === 'succeeded' ? 'succeeded' : 'failed'
+            const outputs = (data.outputs || {}) as Record<string, unknown>
+            const output = outputText(outputs)
+            finalResult = isPromptEcho(output, assistantExamples)
+              ? {
+                  runId,
+                  status: 'failed',
+                  outputs,
+                  output: '',
+                  error:
+                    'Dify 的 LLM 节点返回了 Prompt 中预设的 assistant 示例，而不是本次运行结果。请删除该节点的 assistant 示例消息后重试。',
+                }
+              : {
+                  runId,
+                  status,
+                  outputs,
+                  output,
+                  error: data.error ? String(data.error) : undefined,
               }
-            : {
-                runId,
-                status,
-                outputs,
-                output,
-                error: data.error ? String(data.error) : undefined,
-              }
-        }
-        if (eventName === 'message_end') {
-          finalResult = {
-            runId,
-            status: 'succeeded',
-            output: chatAnswer,
-            conversationId: data.conversation_id ? String(data.conversation_id) : undefined,
+          }
+          if (eventName === 'workflow_finished' && isChat && data.status !== 'succeeded') {
+            finalResult = {
+              runId,
+              status: 'failed',
+              output: chatAnswer,
+              error: String(data.error || 'Dify 执行失败'),
+            }
+          }
+          if (eventName === 'message_end') {
+            finalResult = {
+              runId,
+              status: 'succeeded',
+              output: chatAnswer,
+              conversationId: data.conversation_id ? String(data.conversation_id) : undefined,
+            }
+          }
+          if (eventName === 'error' || eventName === 'workflow_failed') {
+            finalResult = {
+              runId,
+              status: 'failed',
+              output: chatAnswer,
+              error: String(data.message || data.error || 'Dify 执行失败'),
+            }
           }
         }
-        if (eventName === 'error' || eventName === 'workflow_failed') {
-          finalResult = {
-            runId,
-            status: 'failed',
-            output: chatAnswer,
-            error: String(data.message || data.error || 'Dify 执行失败'),
-          }
-        }
+        if (done || finalResult) break
       }
-      if (done || finalResult) break
+      finalResult ||= {
+        runId,
+        status: 'failed',
+        output: chatAnswer,
+        error: 'Dify 流式响应在终止事件前结束，结果可能不完整。',
+      }
+    } finally {
+      if (!streamDone) {
+        await reader.cancel().catch(() => undefined)
+      }
+      reader.releaseLock()
     }
-    finalResult ||= { runId, status: 'succeeded', output: chatAnswer }
     appendHistory(profile, finalResult)
     return finalResult
   } catch (error) {

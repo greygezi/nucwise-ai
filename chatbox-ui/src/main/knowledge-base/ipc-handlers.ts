@@ -177,37 +177,17 @@ export function registerKnowledgeBaseHandlers() {
     try {
       log.info(`ipcMain: kb:delete, kbId=${kbId}`)
 
-      if (!kbId || kbId <= 0) {
+      if (!Number.isSafeInteger(kbId) || kbId <= 0) {
         throw new Error('Invalid knowledge base ID')
       }
 
-      await withTransaction(async () => {
-        const db = getDatabase()
-        const vectorStore = getVectorStore()
-
-        // Verify knowledge base exists before deletion
-        const kbExists = await db.execute('SELECT id FROM knowledge_base WHERE id = ?', [kbId])
-        if (!kbExists.rows[0]) {
-          throw new Error(`Knowledge base ${kbId} not found`)
-        }
-
-        // 1. Delete associated files from kb_file
-        await db.execute({
-          sql: 'DELETE FROM kb_file WHERE kb_id = ?',
-          args: [kbId],
-        })
-        log.info(`[IPC] Deleted file records for kbId=${kbId}`)
-
-        // 2. Delete the knowledge base entry
-        await db.execute({
-          sql: 'DELETE FROM knowledge_base WHERE id = ?',
-          args: [kbId],
-        })
-        log.info(`[IPC] Deleted knowledge base record for kbId=${kbId}`)
-
-        // 3. Delete vector index
-        await vectorStore.deleteIndex({ indexName: `kb_${kbId}` })
-        log.info(`[IPC] Deleted vector index for kbId=${kbId}`)
+      await withTransaction(async (db) => {
+        const kbExists = await db.execute({ sql: 'SELECT id FROM knowledge_base WHERE id = ?', args: [kbId] })
+        if (!kbExists.rows[0]) throw new Error(`Knowledge base ${kbId} not found`)
+        // Use the same SQL transaction for vectors and metadata.
+        await db.execute(`DROP TABLE IF EXISTS "kb_${kbId}"`)
+        await db.execute({ sql: 'DELETE FROM kb_file WHERE kb_id = ?', args: [kbId] })
+        await db.execute({ sql: 'DELETE FROM knowledge_base WHERE id = ?', args: [kbId] })
       })
 
       return { success: true }
@@ -228,7 +208,7 @@ export function registerKnowledgeBaseHandlers() {
     try {
       log.debug(`ipcMain: kb:file:list, kbId=${kbId}`)
 
-      if (!kbId || kbId <= 0) {
+      if (!Number.isSafeInteger(kbId) || kbId <= 0) {
         throw new Error('Invalid knowledge base ID')
       }
 
@@ -268,7 +248,7 @@ export function registerKnowledgeBaseHandlers() {
     try {
       // log.debug(`ipcMain: kb:file:count, kbId=${kbId}`)
 
-      if (!kbId || kbId <= 0) {
+      if (!Number.isSafeInteger(kbId) || kbId <= 0) {
         throw new Error('Invalid knowledge base ID')
       }
 
@@ -294,7 +274,7 @@ export function registerKnowledgeBaseHandlers() {
     try {
       // log.debug(`ipcMain: kb:file:list-paginated, kbId=${kbId}, offset=${offset}, limit=${limit}`)
 
-      if (!kbId || kbId <= 0) {
+      if (!Number.isSafeInteger(kbId) || kbId <= 0) {
         throw new Error('Invalid knowledge base ID')
       }
       if (offset < 0 || limit <= 0 || limit > 100) {
@@ -339,7 +319,7 @@ export function registerKnowledgeBaseHandlers() {
     try {
       log.debug(`ipcMain: kb:file:get-metas, kbId=${kbId}, fileIds=${fileIds.join(',')}`)
 
-      if (!kbId || kbId <= 0) {
+      if (!Number.isSafeInteger(kbId) || kbId <= 0) {
         throw new Error('Invalid knowledge base ID')
       }
       if (!fileIds || fileIds.length === 0) {
@@ -386,7 +366,7 @@ export function registerKnowledgeBaseHandlers() {
       try {
         log.debug(`ipcMain: kb:file:read-chunks, kbId=${kbId}, chunks=${chunks.length}`)
 
-        if (!kbId || kbId <= 0) {
+        if (!Number.isSafeInteger(kbId) || kbId <= 0) {
           throw new Error('Invalid knowledge base ID')
         }
         if (!chunks || !Array.isArray(chunks)) {
@@ -416,7 +396,7 @@ export function registerKnowledgeBaseHandlers() {
     try {
       log.debug(`ipcMain: kb:file:upload, kbId=${kbId}, file=${JSON.stringify(file)}`)
 
-      if (!kbId || kbId <= 0) {
+      if (!Number.isSafeInteger(kbId) || kbId <= 0) {
         throw new Error('Invalid knowledge base ID')
       }
       if (!file || !file.name || !file.path || !file.type) {
@@ -429,7 +409,7 @@ export function registerKnowledgeBaseHandlers() {
       const db = getDatabase()
 
       // Verify knowledge base exists
-      const kbExists = await db.execute('SELECT id FROM knowledge_base WHERE id = ?', [kbId])
+      const kbExists = await db.execute({ sql: 'SELECT id FROM knowledge_base WHERE id = ?', args: [kbId] })
       if (!kbExists.rows[0]) {
         throw new Error(`Knowledge base ${kbId} not found`)
       }
@@ -471,7 +451,7 @@ export function registerKnowledgeBaseHandlers() {
     try {
       log.debug(`ipcMain: kb:search, kbId=${kbId}, query=${query}`)
 
-      if (!kbId || kbId <= 0) {
+      if (!Number.isSafeInteger(kbId) || kbId <= 0) {
         throw new Error('Invalid knowledge base ID')
       }
       if (!query || !query.trim()) {
@@ -500,7 +480,7 @@ export function registerKnowledgeBaseHandlers() {
     try {
       log.debug(`ipcMain: kb:file:retry, fileId=${fileId}, useRemoteParsing=${useRemoteParsing}`)
 
-      if (!fileId || fileId <= 0) {
+      if (!Number.isSafeInteger(fileId) || fileId <= 0) {
         throw new Error('Invalid file ID')
       }
 
@@ -546,7 +526,7 @@ export function registerKnowledgeBaseHandlers() {
     try {
       log.debug(`ipcMain: kb:file:pause, fileId=${fileId}`)
 
-      if (!fileId || fileId <= 0) {
+      if (!Number.isSafeInteger(fileId) || fileId <= 0) {
         throw new Error('Invalid file ID')
       }
 
@@ -589,7 +569,7 @@ export function registerKnowledgeBaseHandlers() {
     try {
       log.debug(`ipcMain: kb:file:resume, fileId=${fileId}`)
 
-      if (!fileId || fileId <= 0) {
+      if (!Number.isSafeInteger(fileId) || fileId <= 0) {
         throw new Error('Invalid file ID')
       }
 
@@ -632,68 +612,28 @@ export function registerKnowledgeBaseHandlers() {
     try {
       log.debug(`ipcMain: kb:file:delete, fileId=${fileId}`)
 
-      if (!fileId || fileId <= 0) {
+      if (!Number.isSafeInteger(fileId) || fileId <= 0) {
         throw new Error('Invalid file ID')
       }
 
-      return withTransaction(async () => {
-        const db = getDatabase()
-        const vectorStore = getVectorStore()
-
-        // Find file information
-        const rs = await db.execute({
-          sql: 'SELECT * FROM kb_file WHERE id = ?',
-          args: [fileId],
-        })
+      return await withTransaction(async (db) => {
+        const rs = await db.execute({ sql: 'SELECT * FROM kb_file WHERE id = ?', args: [fileId] })
         const file = rs.rows[0]
-        if (!file) {
-          throw new Error('File not found')
-        }
-
-        const indexName = `kb_${file.kb_id}`
-
-        // Delete embedding data - use vectorStore.turso for direct operation
-        log.info(`[IPC] Deleting vectors: fileId=${fileId}, indexName=${indexName}`)
-
-        try {
-          // First query the number of vectors to delete
-          const countResult = await (vectorStore as any).turso.execute({
-            sql: `SELECT COUNT(*) as count FROM ${indexName} WHERE json_extract(metadata, '$.fileId') = ?`,
+        if (!file) throw new Error('File not found')
+        const kbId = Number(file.kb_id)
+        if (!Number.isSafeInteger(kbId) || kbId <= 0) throw new Error('Invalid knowledge base ID')
+        const indexName = `kb_${kbId}`
+        const index = await db.execute({
+          sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+          args: [indexName],
+        })
+        if (index.rows.length) {
+          await db.execute({
+            sql: `DELETE FROM "${indexName}" WHERE json_extract(metadata, '$.fileId') = ?`,
             args: [fileId],
           })
-          const vectorCount = Number(countResult.rows[0]?.count || 0)
-          log.info(`[IPC] Found ${vectorCount} vectors to delete`)
-
-          if (vectorCount > 0) {
-            // Delete vector data
-            const deleteResult = await (vectorStore as any).turso.execute({
-              sql: `DELETE FROM ${indexName} WHERE json_extract(metadata, '$.fileId') = ?`,
-              args: [fileId],
-            })
-            const rowsDeleted = Number(deleteResult.rowsAffected || 0)
-            log.info(`[IPC] Deleted ${rowsDeleted} vectors`)
-          } else {
-            log.info(`[IPC] No vectors to delete`)
-          }
-        } catch (vectorDeleteErr: unknown) {
-          log.error(`[IPC] Failed to delete vectors: fileId=${fileId}`, vectorDeleteErr)
-          // Continue with file record deletion even if vector deletion fails
-          sentry.withScope((scope) => {
-            scope.setTag('component', 'knowledge-base-ipc')
-            scope.setTag('operation', 'file_delete_vectors')
-            scope.setExtra('fileId', fileId)
-            scope.setExtra('indexName', indexName)
-            sentry.captureException(vectorDeleteErr)
-          })
         }
-
-        // Delete file record
-        const res = await db.execute({
-          sql: 'DELETE FROM kb_file WHERE id = ?',
-          args: [fileId],
-        })
-        log.info(`[IPC] Deleted file record: fileId=${fileId}, affected rows=${res.rowsAffected ?? 'unknown'}`)
-
+        await db.execute({ sql: 'DELETE FROM kb_file WHERE id = ?', args: [fileId] })
         return { success: true }
       })
     } catch (error: unknown) {

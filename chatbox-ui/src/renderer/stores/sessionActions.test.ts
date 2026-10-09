@@ -170,6 +170,16 @@ beforeEach(() => {
   routerNavigateMock.mockReset()
 })
 
+describe('automatic conversation title placeholders', () => {
+  test.each(['Untitled', '新建对话', 'New Chat'])('treats %s as an automatic title placeholder', (name) => {
+    expect(sessionActions.isAutoTitlePlaceholder(name)).toBe(true)
+  })
+
+  test('does not overwrite a user-defined conversation title', () => {
+    expect(sessionActions.isAutoTitlePlaceholder('蒸馏塔热负荷计算')).toBe(false)
+  })
+})
+
 describe('fork actions', () => {
   test('createNewFork moves trailing messages into a new branch', async () => {
     uuidQueue.push('id-1', 'id-2', 'id-3')

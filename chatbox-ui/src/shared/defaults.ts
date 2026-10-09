@@ -122,6 +122,7 @@ export function settings(): Settings {
 
     shortcuts: {
       quickToggle: 'Alt+`', // 快速切换窗口显隐的快捷键
+      selectionAssistant: 'Ctrl+Alt+Space', // 划词助手的快捷键
       inputBoxFocus: 'mod+i', // 聚焦输入框的快捷键
       inputBoxWebBrowsingMode: 'mod+e', // 切换输入框的 web 浏览模式的快捷键
       newChat: 'mod+n', // 新建聊天的快捷键

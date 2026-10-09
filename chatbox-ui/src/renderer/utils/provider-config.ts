@@ -6,7 +6,7 @@ import { z } from 'zod'
 export const CUSTOM_PROVIDER_ID_CONFLICT = 'builtin-provider-id-conflict'
 
 const modelInfoSchema = z.object({
-  modelId: z.string(),
+  modelId: z.string().trim().min(1),
   nickname: z.string().optional(),
   type: z.enum(['chat', 'embedding', 'rerank', 'image']).optional().default('chat'),
   capabilities: z.array(z.enum(['vision', 'reasoning', 'tool_use'])).optional(),
@@ -14,13 +14,26 @@ const modelInfoSchema = z.object({
   maxOutput: z.number().optional(),
 })
 
-const BuiltinProviderConfigSchema = z.object({
-  id: z.nativeEnum(ModelProviderEnum),
-  settings: z.object({
-    apiHost: z.string().optional(),
-    apiKey: z.string(),
-  }),
-})
+const BuiltinProviderConfigSchema = z
+  .object({
+    id: z.nativeEnum(ModelProviderEnum),
+    settings: z.object({
+      apiHost: z.string().optional(),
+      apiPath: z.string().optional(),
+      apiKey: z.string().optional().default(''),
+      models: z.array(modelInfoSchema).optional(),
+    }),
+  })
+  .superRefine((config, context) => {
+    if (config.id !== ModelProviderEnum.Ollama) return
+
+    if (!config.settings.apiHost || !/^https?:\/\//i.test(config.settings.apiHost)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['settings', 'apiHost'], message: 'Invalid API Host' })
+    }
+    if (!config.settings.models?.length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['settings', 'models'], message: 'Model is required' })
+    }
+  })
 
 const CustomProviderConfigSchema = z.object({
   isCustom: z.literal(true).catch(true),
@@ -88,7 +101,9 @@ function parseProviderConfig(json: unknown): ProviderInfo | (ProviderSettings & 
     const providerSettings: ProviderSettings & { id: ModelProviderEnum } = {
       id: parsed.id as ModelProviderEnum,
       apiHost: parsed.settings.apiHost,
+      apiPath: parsed.settings.apiPath,
       apiKey: parsed.settings.apiKey,
+      models: parsed.settings.models,
     }
     return providerSettings
   }

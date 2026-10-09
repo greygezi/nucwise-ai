@@ -1,9 +1,9 @@
 import { Button, Flex, Image, Indicator, ScrollArea, Stack, Text } from '@mantine/core'
 import type { ProviderBaseInfo } from '@shared/types'
-import { IconChevronRight, IconPlus } from '@tabler/icons-react'
+import { IconChevronRight, IconFileImport, IconPlus } from '@tabler/icons-react'
 import { Link, useRouterState } from '@tanstack/react-router'
 import clsx from 'clsx'
-import { useMemo } from 'react'
+import { useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import CustomProviderIcon from '@/components/CustomProviderIcon'
 import Divider from '@/components/common/Divider'
@@ -15,12 +15,14 @@ import { FEATURED_PROVIDER_IDS, ProviderIconImage } from './providerIcons'
 interface ProviderListProps {
   providers: ProviderBaseInfo[]
   onAddProvider: () => void
+  onImportFile: (file: File) => void
 }
 
-export function ProviderList({ providers, onAddProvider }: ProviderListProps) {
+export function ProviderList({ providers, onAddProvider, onImportFile }: ProviderListProps) {
   const { t } = useTranslation()
   const isSmallScreen = useIsSmallScreen()
   const routerState = useRouterState()
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const providerId = useMemo(() => {
     const pathSegments = routerState.location.pathname.split('/').filter(Boolean)
@@ -116,6 +118,24 @@ export function ProviderList({ providers, onAddProvider }: ProviderListProps) {
         </Stack>
       </ScrollArea>
       <Stack gap="xs" mx="md" my="sm">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,application/json"
+          hidden
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0]
+            if (file) onImportFile(file)
+            event.currentTarget.value = ''
+          }}
+        />
+        <Button
+          variant="outline"
+          leftSection={<ScalableIcon icon={IconFileImport} />}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          导入配置文件
+        </Button>
         <Button variant="outline" leftSection={<ScalableIcon icon={IconPlus} />} onClick={onAddProvider}>
           新增模型服务
         </Button>

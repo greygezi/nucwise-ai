@@ -1,4 +1,10 @@
-import { Theme } from '@shared/types'
+import {
+  DESKTOP_ASSISTANT_STREAM_FIRST_RESPONSE_TIMEOUT_MS,
+  DESKTOP_ASSISTANT_STREAM_IDLE_TIMEOUT_MS,
+  type DesktopAssistantRequest,
+} from '@shared/electron-types'
+import type { SessionSettings } from '@shared/types'
+import { createMessage, Theme } from '@shared/types'
 import { z } from 'zod'
 import { ErrorBoundary } from '@/components/common/ErrorBoundary'
 import Toasts from '@/components/common/Toasts'
@@ -43,10 +49,21 @@ import CssBaseline from '@mui/material/CssBaseline'
 import { ThemeProvider } from '@mui/material/styles'
 import { useQuery } from '@tanstack/react-query'
 import { createRootRoute, Outlet, useLocation } from '@tanstack/react-router'
-import { useAtomValue } from 'jotai'
 import { useEffect, useMemo } from 'react'
+import { createModel, createModelDependencies } from '@/adapters'
 import { trackJkViewEvent } from '@/analytics/jk'
 import { JK_EVENTS, JK_PAGE_NAMES } from '@/analytics/jk-events'
+import {
+  adaptDesktopAssistantMessages,
+  buildDesktopAssistantMessages,
+  buildDesktopAssistantSessionTitle,
+  buildDesktopAssistantSessionTurns,
+  enqueueDesktopAssistantCompose,
+  nextDesktopAssistantPromiseWithTimeout,
+  nextDesktopAssistantStreamPart,
+  DesktopAssistantStreamTimeoutError,
+  type DesktopAssistantStreamTimeoutPhase,
+} from '@/desktopAssistant'
 import SettingsModal, { navigateToSettings } from '@/modals/Settings'
 import { prefetchModelRegistry } from '@/packages/model-registry'
 import { getOS } from '@/packages/navigator'
@@ -57,8 +74,11 @@ import platform from '@/platform'
 import { router } from '@/router'
 import Sidebar from '@/Sidebar'
 import storage from '@/storage'
-import { getSession, useSession } from '@/stores/chatStore'
+import { createSession, getSession, useSession } from '@/stores/chatStore'
+import { lastUsedModelStore } from '@/stores/lastUsedModelStore'
 import * as premiumActions from '@/stores/premiumActions'
+import { insertMessage, switchCurrentSession } from '@/stores/sessionActions'
+import { initEmptyChatSession, resolvePreferredChatModel } from '@/stores/sessionHelpers'
 import { settingsStore, useLanguage, useSettingsStore, useTheme } from '@/stores/settingsStore'
 import { getTaskSession } from '@/stores/taskSessionStore'
 import { useUIStore } from '@/stores/uiStore'
@@ -128,6 +148,124 @@ function BackgroundImageOverlay() {
   )
 }
 
+const desktopAssistantControllers = new Map<string, AbortController>()
+
+async function persistDesktopAssistantTurn(request: DesktopAssistantRequest, result: string) {
+  let session = request.sessionId ? await getSession(request.sessionId) : null
+  const isNewSession = !session
+  if (!session) {
+    session = await createSession({
+      ...initEmptyChatSession(),
+      name: buildDesktopAssistantSessionTitle(request),
+    })
+  }
+  const turns = buildDesktopAssistantSessionTurns(request, result, isNewSession && Boolean(request.followupText.trim()))
+  for (const turn of turns) {
+    await insertMessage(session.id, createMessage(turn.role, turn.content))
+  }
+  return session.id
+}
+
+async function runDesktopAssistantRequest(request: DesktopAssistantRequest) {
+  const api = window.electronAPI
+  if (!api) return
+  desktopAssistantControllers.get(request.requestId)?.abort()
+  const controller = new AbortController()
+  desktopAssistantControllers.set(request.requestId, controller)
+
+  try {
+    api.notifyDesktopAssistantStarted(request.requestId)
+    if (request.completedResult !== undefined) {
+      const sessionId = await persistDesktopAssistantTurn(request, request.completedResult)
+      api.sendDesktopAssistantResult({
+        requestId: request.requestId,
+        sessionId,
+        ok: true,
+        result: request.completedResult,
+      })
+      return
+    }
+    const settings = settingsStore.getState().getSettings()
+    const chatModel = resolvePreferredChatModel(settings.defaultChatModel, lastUsedModelStore.getState().chat)
+    if (!chatModel) {
+      throw new Error('主对话尚未选择可用的 Chat 模型，请先在主对话的模型选择器中选择一个模型。')
+    }
+    api.sendDesktopAssistantProgress({
+      requestId: request.requestId,
+      message: `正在使用主对话模型 ${chatModel.provider} / ${chatModel.modelId}…`,
+    })
+
+    const modelSettings: SessionSettings = {
+      ...settings,
+      ...chatModel,
+      stream: true,
+    }
+    const dependencies = await nextDesktopAssistantPromiseWithTimeout(
+      createModelDependencies(),
+      DESKTOP_ASSISTANT_STREAM_FIRST_RESPONSE_TIMEOUT_MS,
+      'first-response',
+      controller
+    )
+    const model = await nextDesktopAssistantPromiseWithTimeout(
+      createModel(modelSettings, dependencies),
+      DESKTOP_ASSISTANT_STREAM_FIRST_RESPONSE_TIMEOUT_MS,
+      'first-response',
+      controller
+    )
+    const messages = adaptDesktopAssistantMessages(
+      buildDesktopAssistantMessages(request, settings.defaultPrompt),
+      model.isSupportSystemMessage()
+    )
+    let result = ''
+    const stream = model.chatStream(messages, {
+      signal: controller.signal,
+      providerOptions: modelSettings.providerOptions,
+    })
+    const iterator = stream[Symbol.asyncIterator]()
+    let streamPhase: DesktopAssistantStreamTimeoutPhase = 'first-response'
+    while (true) {
+      const step = await nextDesktopAssistantStreamPart(
+        iterator,
+        streamPhase === 'first-response'
+          ? DESKTOP_ASSISTANT_STREAM_FIRST_RESPONSE_TIMEOUT_MS
+          : DESKTOP_ASSISTANT_STREAM_IDLE_TIMEOUT_MS,
+        streamPhase,
+        controller
+      )
+      if (step.done) break
+      const chunk = step.value
+      streamPhase = 'idle'
+      if (chunk.type === 'text-delta') {
+        result += chunk.text
+        api.sendDesktopAssistantChunk({ requestId: request.requestId, text: chunk.text })
+      } else if (chunk.type === 'error') {
+        const detail = 'error' in chunk ? chunk.error : '模型生成失败。'
+        throw new Error(detail instanceof Error ? detail.message : String(detail))
+      }
+    }
+    if (!result.trim()) throw new Error('主对话 Chat 模型未返回文本内容。')
+    const sessionId = await persistDesktopAssistantTurn(request, result)
+    api.sendDesktopAssistantResult({ requestId: request.requestId, sessionId, ok: true, result })
+  } catch (error) {
+    api.sendDesktopAssistantResult({
+      requestId: request.requestId,
+      ok: false,
+      error:
+        error instanceof DesktopAssistantStreamTimeoutError
+          ? error.message
+          : controller.signal.aborted
+            ? '已取消'
+            : error instanceof Error
+              ? error.message
+              : String(error),
+    })
+  } finally {
+    if (desktopAssistantControllers.get(request.requestId) === controller) {
+      desktopAssistantControllers.delete(request.requestId)
+    }
+  }
+}
+
 function Root() {
   const location = useLocation()
   const spellCheck = useSettingsStore((state) => state.spellCheck)
@@ -136,6 +274,58 @@ function Root() {
   useEffect(() => {
     void prefetchModelRegistry()
   }, [])
+
+  useEffect(() => {
+    if (!window.electronAPI?.onDesktopAssistantRequest || !window.electronAPI.onDesktopAssistantCancel) return
+    const removeListener = window.electronAPI.onDesktopAssistantRequest((request) => {
+      void runDesktopAssistantRequest(request)
+    })
+    const removeCancelListener = window.electronAPI.onDesktopAssistantCancel(({ requestId }) => {
+      desktopAssistantControllers.get(requestId)?.abort()
+    })
+    window.electronAPI.notifyDesktopAssistantReady()
+    return () => {
+      removeListener()
+      removeCancelListener()
+      // A renderer reload/unmount must stop provider work. The main process
+      // keeps active requests only for its idle watchdog and will not replay
+      // an already acknowledged request into the new renderer automatically.
+      for (const controller of desktopAssistantControllers.values()) controller.abort()
+      desktopAssistantControllers.clear()
+    }
+  }, [])
+
+  useEffect(() => {
+    const removeListener = window.electronAPI?.onDesktopAssistantCompose?.((text, payload) => {
+      const draft = text.trim()
+      const sessionId = payload?.sessionId?.trim()
+      if (sessionId) {
+        void getSession(sessionId)
+          .then((session) => {
+            if (session) {
+              switchCurrentSession(session.id)
+              return
+            }
+            if (!draft) return
+            enqueueDesktopAssistantCompose(draft, payload, true)
+            void router.navigate({ to: '/', replace: true })
+          })
+          .catch(() => {
+            if (!draft) return
+            enqueueDesktopAssistantCompose(draft, payload, true)
+            void router.navigate({ to: '/', replace: true })
+          })
+        return
+      }
+      if (!draft) return
+      const isChatRoute = location.pathname === '/' || location.pathname.startsWith('/session/')
+      const delivered = enqueueDesktopAssistantCompose(draft, payload, !isChatRoute)
+      if (!delivered || !isChatRoute) {
+        void router.navigate({ to: '/', replace: true })
+      }
+    })
+    return () => removeListener?.()
+  }, [location.pathname])
 
   // The upstream setup wizard is intentionally not part of Desktop Assistant.
   // Redirect stale saved /guide locations back to the independent first-run page.

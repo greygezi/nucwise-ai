@@ -58,8 +58,8 @@ export function generateSkillsXml(skills: SkillInfo[], toolUseSupported = false)
     .join('\n')
 
   const toolHint = toolUseSupported
-    ? "\nWhen a task matches a skill's description, use the load_skill tool to load its full instructions before proceeding.\n"
-    : '\n'
+    ? "\nBefore answering, compare the user's request with the skill descriptions. If one or more match, call load_skill with the matching name before proceeding; do not load unrelated skills.\n"
+    : '\nUse the most relevant available skill description when responding.\n'
 
   return `
 <available_skills>

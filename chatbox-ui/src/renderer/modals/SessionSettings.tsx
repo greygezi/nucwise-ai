@@ -6,6 +6,7 @@ import {
   FileButton,
   Flex,
   Input,
+  Select,
   Slider,
   Stack,
   Switch,
@@ -15,7 +16,7 @@ import {
 } from '@mantine/core'
 import { chatSessionSettings, pictureSessionSettings } from '@shared/defaults'
 import {
-  createMessage,
+  type CopilotDetail,
   isChatSession,
   isPictureSession,
   ModelProviderEnum,
@@ -28,7 +29,7 @@ import {
   getGoogleThinkingMode,
   getSupportedGoogleThinkingLevels,
 } from '@shared/utils/google-thinking'
-import { IconInfoCircle, IconTrash, IconUpload } from '@tabler/icons-react'
+import { IconInfoCircle, IconPlus, IconTrash, IconUpload } from '@tabler/icons-react'
 import { pick } from 'lodash'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -41,12 +42,13 @@ import SegmentedControl from '@/components/common/SegmentedControl'
 import SliderWithInput from '@/components/common/SliderWithInput'
 import { handleImageInputAndSave, ImageInStorage } from '@/components/Image'
 import ImageStyleSelect from '@/components/ImageStyleSelect'
+import { useMyCopilots } from '@/hooks/useCopilots'
 import { useIsSmallScreen } from '@/hooks/useScreenChange'
 import { trackingEvent } from '@/packages/event'
 import storage from '@/storage'
 import { StorageKeyGenerator } from '@/storage/StoreStorage'
 import { updateSession } from '@/stores/chatStore'
-import { getSessionMeta, mergeSettings } from '@/stores/sessionHelpers'
+import { applySessionSystemPrompt, getSessionMeta, mergeSettings } from '@/stores/sessionHelpers'
 import { settingsStore, useSettingsStore } from '@/stores/settingsStore'
 import { add as addToast } from '@/stores/toastActions'
 import { getMessageText } from '../../shared/utils/message'
@@ -56,6 +58,7 @@ const SessionSettingsModal = NiceModal.create(
     const modal = useModal()
     const { t } = useTranslation()
     const isSmallScreen = useIsSmallScreen()
+    const promptSkills = useMyCopilots()
 
     const [editingData, setEditingData] = useState<Session | null>(session || null)
     useEffect(() => {
@@ -110,19 +113,7 @@ const SessionSettingsModal = NiceModal.create(
 
     const applySessionChanges = (target: Session) => {
       target.name = (target.name ?? '').trim() || session.name
-      const trimmed = systemPrompt.trim()
-      const messages = Array.isArray(target.messages) ? [...target.messages] : []
-      if (trimmed === '') {
-        target.messages = messages.filter((m) => m.role !== 'system')
-      } else {
-        const idx = messages.findIndex((m) => m.role === 'system')
-        if (idx >= 0) {
-          const sys = { ...messages[idx], contentParts: [{ type: 'text' as const, text: trimmed }] }
-          target.messages = [...messages.slice(0, idx), sys, ...messages.slice(idx + 1)]
-        } else {
-          target.messages = [createMessage('system', trimmed), ...messages]
-        }
-      }
+      target.messages = applySessionSystemPrompt(target, systemPrompt).messages
       return target
     }
     const onSave = () => {
@@ -135,6 +126,7 @@ const SessionSettingsModal = NiceModal.create(
           const merged = {
             ...(s ?? {}),
             ...getSessionMeta(editingData),
+            copilotId: editingData.copilotId,
             settings: editingData.settings,
           } as Session
 
@@ -147,6 +139,22 @@ const SessionSettingsModal = NiceModal.create(
       // setChatConfigDialogSessionId(null)
       modal.resolve(editingData)
       modal.hide()
+    }
+
+    const loadPromptSkill = (copilot: CopilotDetail) => {
+      setSystemPrompt(copilot.prompt)
+      setEditingData((current) => (current ? { ...current, copilotId: copilot.id } : current))
+    }
+
+    const createPromptSkill = () => {
+      void NiceModal.show('copilot-settings', {
+        copilot: null,
+        mode: 'create',
+        onSave: (copilot: CopilotDetail) => {
+          promptSkills.addOrUpdate(copilot)
+          loadPromptSkill(copilot)
+        },
+      })
     }
 
     if (!session || !editingData) {
@@ -228,6 +236,42 @@ const SessionSettingsModal = NiceModal.create(
               />
             </Stack>
 
+            <Stack gap="xs">
+              <Flex align="end" gap="xs">
+                <Select
+                  label="Skill"
+                  placeholder={(promptSkills.copilots.length ? t('Select') : t('No Copilots Found')) || ''}
+                  data={promptSkills.copilots.map((copilot) => ({ value: copilot.id, label: copilot.name }))}
+                  value={editingData.copilotId || null}
+                  onChange={(id) => {
+                    if (!id) {
+                      setSystemPrompt('')
+                      setEditingData({ ...editingData, copilotId: undefined })
+                      return
+                    }
+                    const copilot = promptSkills.copilots.find((item) => item.id === id)
+                    if (copilot) loadPromptSkill(copilot)
+                  }}
+                  searchable
+                  clearable
+                  className="flex-1"
+                />
+                <Button
+                  variant="light"
+                  leftSection={<ScalableIcon icon={IconPlus} size={16} />}
+                  onClick={createPromptSkill}
+                >
+                  {t('Create')}
+                </Button>
+              </Flex>
+              <Text size="xs" c="dimmed">
+                每个会话可独立加载一个固定提示词；可在“AI 搭档”中继续编辑或删除。
+              </Text>
+              <Text size="xs" c="dimmed">
+                标准化 SKILL.md 请到“设置 → Skills”导入；导入后会根据对话内容自动匹配。
+              </Text>
+            </Stack>
+
             <Textarea
               label={t('Instruction (System Prompt)')}
               placeholder={t('Copilot Prompt Demo') || ''}
@@ -235,7 +279,10 @@ const SessionSettingsModal = NiceModal.create(
               minRows={2}
               maxRows={12}
               value={systemPrompt}
-              onChange={(event) => setSystemPrompt(event.target.value)}
+              onChange={(event) => {
+                setSystemPrompt(event.target.value)
+                if (editingData.copilotId) setEditingData({ ...editingData, copilotId: undefined })
+              }}
               classNames={{
                 input: '!text-chatbox-tint-primary',
               }}

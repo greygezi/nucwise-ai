@@ -1,0 +1,19 @@
+{
+  "id": "nucwise-internal",
+  "name": "内网模型",
+  "type": "openai",
+  "isCustom": true,
+  "settings": {
+    "apiHost": "http://127.0.0.1:8000/v1",
+    "apiPath": "/chat/completions",
+    "apiKey": "",
+    "models": [
+      {
+        "modelId": "your-model-id",
+        "type": "chat"
+      }
+    ]
+  },
+  "defaultModel": "your-model-id",
+  "apply": "if-empty"
+}

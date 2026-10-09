@@ -23,7 +23,7 @@
 
 ## 划词桥接
 
-根程序会打开以下深链：
+独立运行 Python 助手时会打开以下深链：
 
 ```text
 desktopassistant://assistant/compose?text=<URL 编码的文本>
@@ -31,11 +31,13 @@ desktopassistant://assistant/compose?text=<URL 编码的文本>
 
 本项目在以下位置增加了桥接代码：
 
-- `src/main/deeplinks.ts`：识别深链并发送 Electron IPC 事件。
-- `src/preload/index.ts`、`src/shared/electron-types.ts`：安全暴露只读事件订阅接口。
-- `src/renderer/components/InputBox/InputBox.tsx`：把文本写入当前输入框并聚焦。
+- `src/main/deeplinks.ts`：识别独立模式深链并发送 Electron IPC 事件。
+- `src/main/main.ts`：在正式版中通过带请求编号的本机控制通道分派 Chat/Dify 动作、流式片段、取消和继续对话。
+- `src/preload/index.ts`、`src/shared/electron-types.ts`：暴露受限的双向 IPC 接口。
+- `src/renderer/desktopAssistant.ts`、`src/renderer/routes/__root.tsx`：按“默认模型优先、否则最近使用模型”复用主对话 Chat 配置，把划词动作、原文、回答和后续追问写入同一个主窗口会话。
+- `src/renderer/components/InputBox/InputBox.tsx`：消费草稿、写入当前输入框并聚焦。
 
-文本只会预填到草稿框，不会自动发给模型。浮窗结果区的“在完整对话中继续”与托盘菜单均可触发此流程。
+正式版使用主对话 Chat 模型或 Dify Workflow 时，首次成功回答都会在后台创建主窗口会话，浮窗追问会继续追加到该会话；“在完整对话中继续”直接打开它。独立 Python 模式仍使用草稿兼容路径。
 
 ## 许可与发布
 

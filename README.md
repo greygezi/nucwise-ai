@@ -2,7 +2,7 @@
 
 NucWise AI 是一款面向 Windows 的本地优先桌面 AI 助手，集成完整对话窗口、全局划词浮窗、多模型提供方、本地知识库和 Dify 工作流。
 
-在任意应用中选中文字后按 `Ctrl+Alt+Space`，可以快速总结、回复、代写、润色或检查语法；也可以在主窗口中进行多轮对话、管理模型和知识库。
+在任意应用中选中文字后按 `Ctrl+Alt+Space`，可以快速总结、建议答复、代写、润色、检查语法或结构化表达；也可以在主窗口中进行多轮对话、管理模型和知识库。
 
 > 当前版本：`1.1.0`
 >
@@ -42,12 +42,12 @@ NucWise AI-1.1.0-Portable.exe
 
 portable 版本已经包含 Electron、Python、PyQt6 和运行所需的 Node.js 依赖。普通用户不需要安装 Python、Node.js 或 pnpm。
 
-首次启动后，在应用内配置自己的模型提供方、API 地址、API Key 和模型名称。随后可以：
+首次启动后，可以在应用内配置自己的模型提供方、API 地址、API Key 和模型名称。部署方也可以预置同目录或用户目录的 `nucwise-provider.defaults.json`，让内网模型打开即用；详情见《NucWise AI 使用说明》的“预置内网模型服务”。随后可以：
 
 1. 在主窗口中直接创建对话。
 2. 在任意 Windows 应用中选中文字。
 3. 按 `Ctrl+Alt+Space` 打开划词浮窗。
-4. 选择总结、回复、代写、润色或语法检查。
+4. 选择总结、建议答复、代写、润色、语法检查或结构化表达。
 
 ## 从源码开始开发
 
@@ -289,13 +289,15 @@ Electron 主应用的数据包括设置、会话、附件、本地知识库索�
 
 ## Dify 对接
 
-划词助手和主应用都可以使用 Dify，但用途不同：
+正式版划词助手可以直接跟随主对话的统一 Chat 模型，也可以切换到指定的 Dify Workflow：
 
-- 划词助手：调用 `POST /v1/workflows/run`，使用 streaming 模式。
+- 主对话 Chat 模型：优先使用已设置的默认模型，否则沿用主对话最近使用的模型和现有提供方配置，无需为划词助手重复配置。
+- Chat 或 Dify 的划词结果和浮窗追问都会保存到同一个主窗口会话，“在完整对话中继续”会直接打开该会话。
+- Dify 划词助手：调用 `POST /v1/workflows/run`；在“设置 → 划词助手 / Dify”中选择主对话 Chat 模型或指定 Workflow。
 - 知识工作流：调用 `POST /v1/workflows/run`，使用 blocking 模式。
 - 工作流工作台：管理 Workflow 和 Chatflow、动态输入参数、文件上传及运行历史。
 
-直接调用 OpenAI 兼容模型时使用 Chat Completions 接口。具体的桥接和深链约定见 [CHATBOX_INTEGRATION.md](CHATBOX_INTEGRATION.md)。
+单独运行 `Floating_window.py` 时仍可直接调用 OpenAI 兼容 Chat Completions 接口。具体的桥接和深链约定见 [CHATBOX_INTEGRATION.md](CHATBOX_INTEGRATION.md)。
 
 ## 二次开发与提交贡献
 

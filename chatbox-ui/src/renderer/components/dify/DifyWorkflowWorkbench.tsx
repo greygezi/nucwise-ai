@@ -1,23 +1,32 @@
 import {
-  Alert,
   ActionIcon,
+  Alert,
   Button,
   Group,
   Paper,
   PasswordInput,
+  ScrollArea,
   Select,
   SimpleGrid,
-  ScrollArea,
   Stack,
   Switch,
   Text,
   TextInput,
   Title,
 } from '@mantine/core'
-import type { DifyHistoryEntry, DifyProfile, DifyProfileInput } from '@shared/dify'
+import {
+  DESKTOP_ASSISTANT_DEFAULT_CHAT,
+  type DifyHistoryEntry,
+  type DifyProfile,
+  type DifyProfileInput,
+} from '@shared/dify'
 import { IconCopy, IconHistory, IconMessageCircle, IconPlus, IconTrash } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useStore } from 'zustand'
 import { difyClient } from '@/packages/dify/client'
+import { lastUsedModelStore } from '@/stores/lastUsedModelStore'
+import { resolvePreferredChatModel } from '@/stores/sessionHelpers'
+import { useSettingsStore } from '@/stores/settingsStore'
 
 const emptyProfile: DifyProfileInput = {
   name: '新工作流',
@@ -28,6 +37,8 @@ const emptyProfile: DifyProfileInput = {
 }
 
 export default function DifyWorkflowWorkbench() {
+  const defaultChatModel = useSettingsStore((state) => state.defaultChatModel)
+  const lastUsedChatModel = useStore(lastUsedModelStore, (state) => state.chat)
   const [profiles, setProfiles] = useState<DifyProfile[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [editor, setEditor] = useState<DifyProfileInput>(emptyProfile)
@@ -36,6 +47,11 @@ export default function DifyWorkflowWorkbench() {
   const [history, setHistory] = useState<DifyHistoryEntry[]>([])
 
   const selected = useMemo(() => profiles.find((item) => item.id === selectedId), [profiles, selectedId])
+  const assistantProfile = useMemo(
+    () => profiles.find((item) => item.id === assistantProfileId),
+    [profiles, assistantProfileId]
+  )
+  const chatModel = resolvePreferredChatModel(defaultChatModel, lastUsedChatModel)
 
   const refresh = useCallback(async () => {
     const [nextProfiles, nextAssistantProfile, nextHistory] = await Promise.all([
@@ -46,7 +62,7 @@ export default function DifyWorkflowWorkbench() {
     setProfiles(nextProfiles)
     setAssistantProfileId(nextAssistantProfile)
     setHistory(nextHistory)
-    setSelectedId((current) => current || nextProfiles[0]?.id || null)
+    setSelectedId((current) => current || nextAssistantProfile || nextProfiles[0]?.id || null)
   }, [])
 
   useEffect(() => {
@@ -118,13 +134,83 @@ export default function DifyWorkflowWorkbench() {
   return (
     <Stack p="md" gap="lg" className="overflow-auto">
       <Stack gap={2}>
-        <Title order={4}>Dify 工作流</Title>
+        <Title order={4}>划词助手与 Dify 工作流</Title>
         <Text size="sm" c="dimmed">
-          管理 Workflow 与 Chatflow 的连接配置；输入参数和运行结果统一在对话界面处理。
+          划词助手可跟随主对话的统一 Chat 模型，或使用一个 Dify Workflow；成功结果会自动创建或继续主会话。
         </Text>
       </Stack>
 
-      <Alert color={status.includes('失败') || status.includes('请') ? 'orange' : 'indigo'}>{status}</Alert>
+      <Paper withBorder p="lg">
+        <Stack>
+          <Stack gap={2}>
+            <Title order={5}>划词助手执行方式</Title>
+            <Text size="sm" c="dimmed">
+              这里决定点击“总结”、“翻译”等划词操作时实际调用哪个引擎。
+            </Text>
+          </Stack>
+          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+            <Paper withBorder p="md">
+              <Stack gap="sm">
+                <Group justify="space-between">
+                  <Text fw={600}>Chat 模型</Text>
+                  <Text size="xs" c={!assistantProfileId ? 'teal' : 'dimmed'}>
+                    {!assistantProfileId ? '当前方式' : '可选'}
+                  </Text>
+                </Group>
+                <Text size="sm" c={chatModel ? undefined : 'orange'}>
+                  {chatModel
+                    ? `跟随主对话：${chatModel.provider} / ${chatModel.modelId}`
+                    : '跟随主对话当前选择；主对话尚未选择 Chat 模型。'}
+                </Text>
+                <Button
+                  variant={!assistantProfileId ? 'filled' : 'light'}
+                  onClick={async () => {
+                    await difyClient.setAssistantProfile(DESKTOP_ASSISTANT_DEFAULT_CHAT)
+                    setAssistantProfileId('')
+                    setStatus('划词助手已切换为主对话统一模型')
+                  }}
+                >
+                  {!assistantProfileId ? '正在跟随主对话' : '使用主对话模型'}
+                </Button>
+              </Stack>
+            </Paper>
+
+            <Paper withBorder p="md">
+              <Stack gap="sm">
+                <Group justify="space-between">
+                  <Text fw={600}>Dify Workflow</Text>
+                  <Text size="xs" c={assistantProfileId ? 'teal' : 'dimmed'}>
+                    {assistantProfileId ? '当前方式' : '可选'}
+                  </Text>
+                </Group>
+                <Text size="sm" c={assistantProfileId ? undefined : 'dimmed'}>
+                  {assistantProfile ? `当前工作流：${assistantProfile.name}` : '尚未选择划词助手工作流。'}
+                </Text>
+                <Select
+                  placeholder="选择已保存的 Workflow"
+                  value={selected?.appType === 'workflow' ? selectedId : null}
+                  data={profiles
+                    .filter((profile) => profile.appType === 'workflow')
+                    .map((profile) => ({ value: profile.id, label: profile.name }))}
+                  onChange={setSelectedId}
+                />
+                <Button
+                  variant={assistantProfileId === selectedId ? 'filled' : 'light'}
+                  disabled={!selectedId || selected?.appType !== 'workflow' || !selected.hasApiKey}
+                  onClick={async () => {
+                    if (!selectedId) return
+                    await difyClient.setAssistantProfile(selectedId)
+                    setAssistantProfileId(selectedId)
+                    setStatus('已设为划词助手工作流')
+                  }}
+                >
+                  {assistantProfileId === selectedId ? '正在使用此 Workflow' : '使用此 Workflow'}
+                </Button>
+              </Stack>
+            </Paper>
+          </SimpleGrid>
+        </Stack>
+      </Paper>
 
       <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
         <Paper withBorder p="lg">
@@ -148,6 +234,7 @@ export default function DifyWorkflowWorkbench() {
                 </Button>
               </Group>
             </Group>
+            <Alert color={status.includes('失败') || status.includes('请') ? 'orange' : 'indigo'}>{status}</Alert>
             <Select
               label="已保存应用"
               placeholder="新增或选择应用"
@@ -187,18 +274,6 @@ export default function DifyWorkflowWorkbench() {
               onChange={(e) => setEditor({ ...editor, verifyTls: e.currentTarget.checked })}
             />
             <Group justify="flex-end">
-              {selectedId && selected?.appType === 'workflow' && (
-                <Button
-                  variant={assistantProfileId === selectedId ? 'filled' : 'light'}
-                  onClick={async () => {
-                    await difyClient.setAssistantProfile(selectedId)
-                    setAssistantProfileId(selectedId)
-                    setStatus('已设为浮窗助手工作流')
-                  }}
-                >
-                  {assistantProfileId === selectedId ? '浮窗助手正在使用' : '设为浮窗助手'}
-                </Button>
-              )}
               {selectedId && (
                 <Button color="red" variant="subtle" leftSection={<IconTrash size={15} />} onClick={remove}>
                   删除
@@ -232,7 +307,9 @@ export default function DifyWorkflowWorkbench() {
           <Group gap="xs">
             <IconHistory size={18} />
             <Title order={5}>运行历史</Title>
-            <Text size="xs" c="dimmed">保留最近 100 次执行结果</Text>
+            <Text size="xs" c="dimmed">
+              保留最近 100 次执行结果
+            </Text>
           </Group>
           <Button
             variant="subtle"
@@ -250,7 +327,9 @@ export default function DifyWorkflowWorkbench() {
           </Button>
         </Group>
         {history.length === 0 ? (
-          <Text size="sm" c="dimmed">尚无运行记录。工作流执行后，状态和文本结果会保留在这里。</Text>
+          <Text size="sm" c="dimmed">
+            尚无运行记录。工作流执行后，状态和文本结果会保留在这里。
+          </Text>
         ) : (
           <ScrollArea mah={300} type="auto">
             <Stack gap="xs">
@@ -259,13 +338,19 @@ export default function DifyWorkflowWorkbench() {
                   <Group justify="space-between" align="flex-start" wrap="nowrap">
                     <Stack gap={2} className="min-w-0" flex={1}>
                       <Group gap="xs">
-                        <Text fw={600} size="sm">{item.profileName}</Text>
+                        <Text fw={600} size="sm">
+                          {item.profileName}
+                        </Text>
                         <Text size="xs" c={item.status === 'succeeded' ? 'teal' : 'red'}>
                           {item.status === 'succeeded' ? '成功' : item.status === 'stopped' ? '已停止' : '失败'}
                         </Text>
-                        <Text size="xs" c="dimmed">{new Date(item.createdAt).toLocaleString()}</Text>
+                        <Text size="xs" c="dimmed">
+                          {new Date(item.createdAt).toLocaleString()}
+                        </Text>
                       </Group>
-                      <Text size="xs" c="dimmed" lineClamp={2}>{item.output || item.error || '未返回文本结果'}</Text>
+                      <Text size="xs" c="dimmed" lineClamp={2}>
+                        {item.output || item.error || '未返回文本结果'}
+                      </Text>
                     </Stack>
                     <ActionIcon
                       variant="subtle"

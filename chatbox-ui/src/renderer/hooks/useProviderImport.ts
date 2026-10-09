@@ -25,27 +25,48 @@ export function useProviderImport(providers: ProviderInfo[]) {
     [providers]
   )
 
+  const openImportText = useCallback(
+    (text: string) => {
+      const config = parseProviderFromJson(text)
+      if (!config) {
+        setImportError(t('Invalid provider configuration format'))
+        return
+      }
+
+      checkExistingProvider(config.id)
+      setImportedConfig(config)
+      setImportModalOpened(true)
+    },
+    [checkExistingProvider, t]
+  )
+
   const handleClipboardImport = async () => {
     try {
       setIsImporting(true)
       setImportError(null)
 
       const text = await navigator.clipboard.readText()
-      const config = parseProviderFromJson(text)
-
-      if (!config) {
-        setImportError(t('Invalid provider configuration format'))
-        return
-      }
-
-      // Check if provider already exists
-      checkExistingProvider(config.id)
-
-      setImportedConfig(config)
-      setImportModalOpened(true)
+      openImportText(text)
     } catch (err) {
       console.error('Clipboard import failed:', err)
       setImportError(t('Failed to read from clipboard'))
+    } finally {
+      setIsImporting(false)
+    }
+  }
+
+  const handleFileImport = async (file: File) => {
+    try {
+      setIsImporting(true)
+      setImportError(null)
+      if (file.size > 1024 * 1024) {
+        setImportError(t('Invalid provider configuration format'))
+        return
+      }
+      openImportText(await file.text())
+    } catch (err) {
+      console.error('File import failed:', err)
+      setImportError(t('Invalid provider configuration format'))
     } finally {
       setIsImporting(false)
     }
@@ -69,6 +90,7 @@ export function useProviderImport(providers: ProviderInfo[]) {
     existingProvider,
     checkExistingProvider,
     handleClipboardImport,
+    handleFileImport,
     handleCancelImport,
   }
 }

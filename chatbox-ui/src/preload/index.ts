@@ -48,10 +48,35 @@ const electronHandler: ElectronIPC = {
     ipcRenderer.on('navigate-to', listener)
     return () => ipcRenderer.off('navigate-to', listener)
   },
-  onDesktopAssistantCompose: (callback: (text: string) => void) => {
-    const listener = (_event: unknown, text: string) => callback(text)
+  onDesktopAssistantCompose: (callback) => {
+    const listener = (_event: unknown, text: string, payload?: Parameters<typeof callback>[1]) => callback(text, payload)
     ipcRenderer.on('desktop-assistant-compose', listener)
     return () => ipcRenderer.off('desktop-assistant-compose', listener)
+  },
+  onDesktopAssistantRequest: (callback) => {
+    const listener = (_event: unknown, request: Parameters<typeof callback>[0]) => callback(request)
+    ipcRenderer.on('desktop-assistant:request', listener)
+    return () => ipcRenderer.off('desktop-assistant:request', listener)
+  },
+  onDesktopAssistantCancel: (callback) => {
+    const listener = (_event: unknown, event: Parameters<typeof callback>[0]) => callback(event)
+    ipcRenderer.on('desktop-assistant:cancel', listener)
+    return () => ipcRenderer.off('desktop-assistant:cancel', listener)
+  },
+  notifyDesktopAssistantReady: () => {
+    ipcRenderer.send('desktop-assistant:ready')
+  },
+  notifyDesktopAssistantStarted: (requestId) => {
+    ipcRenderer.send('desktop-assistant:started', requestId)
+  },
+  sendDesktopAssistantProgress: (event) => {
+    ipcRenderer.send('desktop-assistant:progress', event)
+  },
+  sendDesktopAssistantChunk: (event) => {
+    ipcRenderer.send('desktop-assistant:chunk', event)
+  },
+  sendDesktopAssistantResult: (event) => {
+    ipcRenderer.send('desktop-assistant:result', event)
   },
   onDifyRunEvent: (callback) => {
     const listener = (_event: unknown, payload: Parameters<typeof callback>[0]) => callback(payload)

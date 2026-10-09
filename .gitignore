@@ -1,4 +1,5 @@
 config.json
+nucwise-provider.defaults.json
 __pycache__/
 *.py[cod]
 .superdesign/

@@ -1,4 +1,4 @@
-import type { ProviderSettings, Settings } from '@shared/types'
+import { ModelProviderEnum, type ProviderSettings, type Settings } from '@shared/types'
 
 export type ProviderSettingsUpdate =
   | Partial<ProviderSettings>
@@ -16,6 +16,11 @@ export function mergeProviderSettings(
     providers: {
       ...(currentSettings.providers || {}),
       [providerId]: {
+        ...(!currentProviderSettings &&
+        providerId === ModelProviderEnum.Ollama &&
+        nextProviderSettings.models === undefined
+          ? { models: [] }
+          : {}),
         ...(currentProviderSettings || {}),
         ...nextProviderSettings,
       },

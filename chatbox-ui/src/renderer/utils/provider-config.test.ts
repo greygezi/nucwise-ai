@@ -73,6 +73,47 @@ describe('provider-config', () => {
       expect(result?.apiKey).toBe('sk-test-key')
     })
 
+    it('preserves Ollama models from a builtin import template', () => {
+      const result = parseProviderFromJson(
+        JSON.stringify({
+          id: ModelProviderEnum.Ollama,
+          settings: {
+            apiHost: 'http://192.168.1.20:11434',
+            apiKey: 'local-gateway-key',
+            models: [
+              { modelId: 'qwen3:8b', type: 'chat' },
+              { modelId: 'bge-m3:latest', type: 'embedding' },
+            ],
+          },
+        })
+      )
+
+      expect(result).toMatchObject({
+        id: ModelProviderEnum.Ollama,
+        apiHost: 'http://192.168.1.20:11434',
+        apiKey: 'local-gateway-key',
+        models: [
+          { modelId: 'qwen3:8b', type: 'chat' },
+          { modelId: 'bge-m3:latest', type: 'embedding' },
+        ],
+      })
+    })
+
+    it('rejects Ollama templates without a usable model', () => {
+      const result = parseProviderFromJson(
+        JSON.stringify({
+          id: ModelProviderEnum.Ollama,
+          settings: {
+            apiHost: 'http://127.0.0.1:11434',
+            apiKey: '',
+            models: [{ modelId: '   ', type: 'chat' }],
+          },
+        })
+      )
+
+      expect(result).toBeUndefined()
+    })
+
     it('should reject explicitly custom configs when the id matches a builtin provider', () => {
       const configJson = JSON.stringify({
         isCustom: true,
