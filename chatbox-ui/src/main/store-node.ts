@@ -5,6 +5,11 @@ import path from 'path'
 import sanitizeFilename from 'sanitize-filename'
 import * as defaults from '../shared/defaults'
 import type { Config, Settings } from '../shared/types'
+import {
+  loadInternalProviderDefaults,
+  materializePackagedInternalProviderDefaults,
+  mergeInternalProviderDefaults,
+} from './internal-provider-defaults'
 import { getLogger } from './util'
 
 const logger = getLogger('store-node')
@@ -41,6 +46,24 @@ export const store = new Store<StoreType>({
   clearInvalidConfig: true, // 当配置JSON不合法时，清空配置
 })
 logger.info('init store, config path:', store.path)
+
+// Optional deployment configuration: seed the renderer settings before hydration.
+// User-edited values win by default; set "apply": "always" for centrally managed upgrades.
+materializePackagedInternalProviderDefaults()
+const internalProviderDefaults = loadInternalProviderDefaults()
+if (internalProviderDefaults) {
+  const currentSettings = store.get<'settings'>('settings', defaults.settings())
+  const nextSettings = mergeInternalProviderDefaults(currentSettings, internalProviderDefaults.config)
+  if (JSON.stringify(currentSettings) !== JSON.stringify(nextSettings)) {
+    store.set('settings', nextSettings)
+  }
+  logger.info(
+    'internal provider defaults applied:',
+    internalProviderDefaults.config.id,
+    internalProviderDefaults.config.apply,
+    internalProviderDefaults.sourcePath
+  )
+}
 
 // 3) 启动自动备份，每10分钟备份一次，并自动清理多余的备份文件
 autoBackup()

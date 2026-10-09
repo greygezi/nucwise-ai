@@ -13,6 +13,10 @@ interface SkillInstallResult {
   error?: string
 }
 
+interface SkillImportResult extends SkillInstallResult {
+  canceled?: boolean
+}
+
 interface SkillUpdateResult {
   hasUpdate: boolean
   currentHash?: string
@@ -35,6 +39,10 @@ export const skillsController = {
 
   async openSkillsDirectory(): Promise<void> {
     await window.electronAPI.invoke('skills:open-directory')
+  },
+
+  importSkill(): Promise<SkillImportResult> {
+    return window.electronAPI.invoke('skills:import')
   },
 
   executeScript(skillName: string, scriptName: string, args?: string[]): Promise<SkillScriptResult> {

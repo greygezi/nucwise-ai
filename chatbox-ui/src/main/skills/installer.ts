@@ -19,6 +19,10 @@ interface InstallResult {
   error?: string
 }
 
+export interface ImportSkillResult extends InstallResult {
+  canceled?: boolean
+}
+
 interface DeleteResult {
   success: boolean
   error?: string
@@ -67,6 +71,95 @@ function readSourceJson(skillDir: string): SkillSource | null {
 
 function writeSourceJson(skillDir: string, source: SkillSource): void {
   fs.writeFileSync(path.join(skillDir, 'source.json'), JSON.stringify(source, null, 2), 'utf-8')
+}
+
+/**
+ * Import a local SKILL.md or skill directory into the managed skills folder.
+ * The directory form preserves scripts/references/assets and other skill files.
+ */
+export function importSkillFromPath(sourcePath: string): ImportSkillResult {
+  try {
+    const source = path.resolve(sourcePath)
+    if (!fs.existsSync(source)) {
+      return { success: false, skillName: '', error: 'Selected skill path does not exist' }
+    }
+
+    const sourceStat = fs.statSync(source)
+    const isDirectory = sourceStat.isDirectory()
+    const skillMdPath = isDirectory ? path.join(source, 'SKILL.md') : source
+    if (!isDirectory && path.basename(source).toLowerCase() !== 'skill.md') {
+      return { success: false, skillName: '', error: 'Please select a SKILL.md file or its containing folder' }
+    }
+    if (!fs.existsSync(skillMdPath)) {
+      return { success: false, skillName: '', error: 'No SKILL.md found in the selected path' }
+    }
+
+    const parsed = parseSkillFile(skillMdPath)
+    if (!parsed) {
+      return {
+        success: false,
+        skillName: '',
+        error: 'Invalid SKILL.md: frontmatter must include a valid name and description',
+      }
+    }
+
+    const skillsDir = path.resolve(getSkillsDir())
+    if (
+      source === skillsDir ||
+      source.startsWith(`${skillsDir}${path.sep}`) ||
+      skillsDir.startsWith(`${source}${path.sep}`)
+    ) {
+      return {
+        success: false,
+        skillName: parsed.metadata.name,
+        error: 'The selected skill is already in the Skills folder',
+      }
+    }
+
+    const targetDir = path.join(skillsDir, parsed.metadata.name)
+    if (fs.existsSync(targetDir)) {
+      return {
+        success: false,
+        skillName: parsed.metadata.name,
+        error: `Skill "${parsed.metadata.name}" already exists; delete it before importing again`,
+      }
+    }
+
+    fs.mkdirSync(skillsDir, { recursive: true })
+    const tempDir = path.join(skillsDir, `.tmp-import-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+    try {
+      if (isDirectory) {
+        fs.cpSync(source, tempDir, { recursive: true })
+      } else {
+        fs.mkdirSync(tempDir, { recursive: true })
+        fs.copyFileSync(source, path.join(tempDir, 'SKILL.md'))
+        const sourceDir = path.dirname(source)
+        for (const directory of ['scripts', 'references', 'assets']) {
+          const optionalPath = path.join(sourceDir, directory)
+          if (fs.existsSync(optionalPath) && fs.statSync(optionalPath).isDirectory()) {
+            fs.cpSync(optionalPath, path.join(tempDir, directory), { recursive: true })
+          }
+        }
+      }
+
+      fs.renameSync(tempDir, targetDir)
+      writeSourceJson(targetDir, {
+        type: 'local',
+        skillPath: source,
+        installedAt: new Date().toISOString(),
+      })
+      log.info(`Imported skill "${parsed.metadata.name}" from ${source}`)
+      return { success: true, skillName: parsed.metadata.name }
+    } finally {
+      if (fs.existsSync(tempDir)) {
+        fs.rmSync(tempDir, { recursive: true, force: true })
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    log.error(`Failed to import skill from ${sourcePath}`, error)
+    return { success: false, skillName: '', error: message }
+  }
 }
 
 export async function installSkillFromGitHub(owner: string, repo: string, skillPath: string): Promise<InstallResult> {

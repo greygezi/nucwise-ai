@@ -14,7 +14,7 @@ import {
   setAssistantProfileId,
 } from './service'
 
-export function registerDifyHandlers() {
+export function registerDifyHandlers(onAssistantProfileChanged?: () => void) {
   ipcMain.handle('dify:profiles:list', () => listProfiles())
   ipcMain.handle('dify:profiles:save', (_event, input: DifyProfileInput) => saveProfile(input))
   ipcMain.handle('dify:profiles:delete', (_event, id: string) => deleteProfile(id))
@@ -25,5 +25,9 @@ export function registerDifyHandlers() {
   ipcMain.handle('dify:history:list', () => listHistory())
   ipcMain.handle('dify:history:clear', () => clearHistory())
   ipcMain.handle('dify:assistant-profile:get', () => getAssistantProfileId())
-  ipcMain.handle('dify:assistant-profile:set', (_event, profileId: string) => setAssistantProfileId(profileId))
+  ipcMain.handle('dify:assistant-profile:set', (_event, profileId: string) => {
+    const result = setAssistantProfileId(profileId)
+    onAssistantProfileChanged?.()
+    return result
+  })
 }

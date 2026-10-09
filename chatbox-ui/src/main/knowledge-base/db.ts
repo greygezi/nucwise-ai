@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { Client } from '@libsql/client'
+import type { Client, Transaction } from '@libsql/client'
 import { LibSQLVector } from '@mastra/libsql'
 import { app } from 'electron'
 import { sentry } from '../adapters/sentry'
@@ -27,6 +27,7 @@ if (typeof global.crypto === 'undefined' || !('subtle' in global.crypto)) {
 
 let db: Client
 let vectorStore: LibSQLVector
+let writeQueue: Promise<void> = Promise.resolve()
 
 async function initDB(db: Client) {
   try {
@@ -192,44 +193,30 @@ export function parseSQLiteTimestamp(sqliteTimestamp: string): number {
   }
 }
 
-// Transaction wrapper - ensures atomicity of database operations
-export async function withTransaction<T>(operation: () => Promise<T>): Promise<T> {
-  const db = getDatabase()
-  const transactionId = Math.random().toString(36).slice(2, 10)
+// ponytail: serialize knowledge-base writes; per-database queues if write throughput matters.
+export function runVectorWrite<T>(operation: () => Promise<T>): Promise<T> {
+  const run = writeQueue.then(operation, operation)
+  writeQueue = run.then(
+    () => undefined,
+    () => undefined
+  )
+  return run
+}
 
-  try {
-    log.debug(`[DB] Starting transaction ${transactionId}`)
-    await db.execute('BEGIN TRANSACTION')
-    const result = await operation()
-    await db.execute('COMMIT')
-    log.debug(`[DB] Transaction ${transactionId} committed successfully`)
-    return result
-  } catch (error) {
-    log.error(`[DB] Transaction ${transactionId} failed:`, error)
-
+export function withTransaction<T>(operation: (transaction: Transaction) => Promise<T>): Promise<T> {
+  return runVectorWrite(async () => {
+    const transaction = await getDatabase().transaction('write')
     try {
-      await db.execute('ROLLBACK')
-      log.debug(`[DB] Transaction ${transactionId} rolled back`)
-    } catch (rollbackError) {
-      log.error(`[DB] Failed to rollback transaction ${transactionId}:`, rollbackError)
-      sentry.withScope((scope) => {
-        scope.setTag('component', 'knowledge-base-db')
-        scope.setTag('operation', 'transaction_rollback')
-        scope.setExtra('transactionId', transactionId)
-        sentry.captureException(rollbackError)
-      })
+      const result = await operation(transaction)
+      await transaction.commit()
+      return result
+    } catch (error) {
+      await transaction.rollback().catch((rollbackError) => log.error('[DB] Rollback failed', rollbackError))
+      throw error
+    } finally {
+      transaction.close()
     }
-
-    // Report transaction failures to Sentry for critical operations
-    sentry.withScope((scope) => {
-      scope.setTag('component', 'knowledge-base-db')
-      scope.setTag('operation', 'transaction_failure')
-      scope.setExtra('transactionId', transactionId)
-      sentry.captureException(error)
-    })
-
-    throw error
-  }
+  })
 }
 
 // Cleanup processing files that may have been left from previous session

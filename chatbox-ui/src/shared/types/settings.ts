@@ -211,6 +211,7 @@ const ShortcutToggleWindowValueSchema = z.enum(shortcutToggleWindowValues as [st
 
 const ShortcutSettingSchema = z.object({
   quickToggle: ShortcutToggleWindowValueSchema,
+  selectionAssistant: z.string().catch('Ctrl+Alt+Space'),
   inputBoxFocus: z.string(),
   inputBoxWebBrowsingMode: z.string(),
   newChat: z.string(),

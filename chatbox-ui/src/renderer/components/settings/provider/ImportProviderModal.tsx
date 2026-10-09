@@ -1,6 +1,7 @@
-import { Box, Button, Flex, ScrollArea, Stack, Text, TextInput } from '@mantine/core'
+import type { TextInputProps } from '@mantine/core'
+import { Box, Button, Flex, PasswordInput, ScrollArea, Stack, Text, TextInput } from '@mantine/core'
+import { SystemProviders } from '@shared/defaults'
 import type { ModelProviderEnum, ProviderInfo, ProviderSettings } from '@shared/types'
-import { ModelProviderType } from '@shared/types'
 import { IconAlertTriangle } from '@tabler/icons-react'
 import { useNavigate } from '@tanstack/react-router'
 import { useCallback } from 'react'
@@ -33,7 +34,11 @@ const readOnlyInputStyles = {
 }
 
 // Reusable read-only input component
-const ReadOnlyInput = ({ label, value, ...props }: { label: string; value: string; [key: string]: any }) => {
+const ReadOnlyInput = ({
+  label,
+  value,
+  ...props
+}: Omit<TextInputProps, 'label' | 'value'> & { label: string; value: string }) => {
   const { t } = useTranslation()
   return <TextInput label={t(label)} value={value} readOnly styles={readOnlyInputStyles} {...props} />
 }
@@ -44,20 +49,18 @@ export function ImportProviderModal({ opened, onClose, importedConfig, existingP
   const setSettings = useSettingsStore((s) => s.setSettings)
   const providers = useSettingsStore((s) => s.providers)
   const customProviders = useSettingsStore((s) => s.customProviders)
+  const hiddenProviderIds = useSettingsStore((s) => s.hiddenProviderIds) || []
 
   // Derive form values from props directly
   const providerName =
     (importedConfig && ('name' in importedConfig ? importedConfig.name : '')) ||
     (existingProvider && 'name' in existingProvider ? existingProvider.name : '') ||
+    SystemProviders().find((provider) => provider.id === importedConfig?.id)?.name ||
     ''
   const providerId = importedConfig?.id || ''
   const apiHost = importedConfig?.apiHost || existingProvider?.apiHost || ''
   const apiPath = importedConfig?.apiPath || ''
   const apiKey = importedConfig?.apiKey || ''
-  const providerType =
-    (importedConfig && 'type' in importedConfig ? importedConfig.type : undefined) ||
-    (existingProvider && 'type' in existingProvider ? existingProvider.type : undefined) ||
-    ModelProviderType.OpenAI
 
   // Filter out duplicate model IDs, fallback to existing provider models
   const allModels = importedConfig?.models || existingProvider?.models || []
@@ -76,6 +79,7 @@ export function ImportProviderModal({ opened, onClose, importedConfig, existingP
           existingProvider,
           providers,
           customProviders,
+          hiddenProviderIds,
         })
       )
       addToast(t(existingProvider ? 'Provider updated successfully' : 'Provider imported successfully'))
@@ -88,7 +92,18 @@ export function ImportProviderModal({ opened, onClose, importedConfig, existingP
     } catch (error) {
       addToast(error instanceof Error ? error.message : t('Failed to import provider'))
     }
-  }, [providerId, existingProvider, providers, customProviders, setSettings, navigate, t, onClose, importedConfig])
+  }, [
+    providerId,
+    existingProvider,
+    providers,
+    customProviders,
+    hiddenProviderIds,
+    setSettings,
+    navigate,
+    t,
+    onClose,
+    importedConfig,
+  ])
 
   return (
     <AdaptiveModal
@@ -148,7 +163,7 @@ export function ImportProviderModal({ opened, onClose, importedConfig, existingP
             </Flex>
           )}
 
-          <ReadOnlyInput label="API Key" value={apiKey} mb="md" />
+          <PasswordInput label={t('API Key')} value={apiKey} readOnly styles={readOnlyInputStyles} mb="md" />
 
           {/* Model list */}
           {importedConfig?.models && importedConfig.models.length > 0 && (

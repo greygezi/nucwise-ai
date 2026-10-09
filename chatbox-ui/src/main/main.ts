@@ -24,11 +24,31 @@ import os from 'os'
 import path from 'path'
 // @ts-expect-error - source-map-support doesn't have type definitions
 import * as sourceMapSupport from 'source-map-support'
+import type {
+  DesktopAssistantChunkEvent,
+  DesktopAssistantProgressEvent,
+  DesktopAssistantRequest,
+  DesktopAssistantResultEvent,
+} from 'src/shared/electron-types'
+import {
+  DESKTOP_ASSISTANT_ACTIVE_IDLE_TIMEOUT_MS,
+  DESKTOP_ASSISTANT_RENDERER_ACK_TIMEOUT_MS,
+} from 'src/shared/electron-types'
 import type { ShortcutSetting } from 'src/shared/types'
 import * as autoLauncher from './autoLauncher'
 import { handleDeepLink } from './deeplinks'
+import { buildDesktopAssistantComposeText } from './desktopAssistantCompose'
+import { DesktopAssistantRequestLifecycle, isDesktopAssistantRendererReload } from './desktopAssistantLifecycle'
+import { attachDesktopAssistantProtocol, formatDesktopAssistantExecutionMode } from './desktopAssistantProtocol'
 import { registerDifyHandlers } from './dify/ipc-handlers'
-import { getAssistantProfileId, migrateLegacyKnowledgeProfile, run as runDify } from './dify/service'
+import {
+  cancel as cancelDify,
+  getAssistantProfileId,
+  listProfiles as listDifyProfiles,
+  migrateLegacyKnowledgeProfile,
+  run as runDify,
+} from './dify/service'
+import { isAllowedExternalUrl, isSameDocumentNavigation } from './externalLinks'
 import { parseFile } from './file-parser'
 import Locale from './locales'
 import * as mcpIpc from './mcp/ipc-stdio-transport'
@@ -162,6 +182,47 @@ let desktopAssistantServer: Server | null = null
 let desktopAssistantSocket: Socket | null = null
 let desktopAssistantStopping = false
 let desktopAssistantRequestId = 0
+const desktopAssistantRequests = new Set<string>()
+const desktopAssistantDifyRequests = new Set<string>()
+const desktopAssistantPendingRequests = new Map<string, DesktopAssistantRequest>()
+let desktopAssistantRendererReady = false
+
+function describeDesktopAssistantRequest(requestId: string, detail: string) {
+  // Request IDs and lengths are safe diagnostics; never log selected text,
+  // prompts, provider credentials, or model output here.
+  log.info(`[NucWise AI] DesktopAssistant request=${requestId} ${detail}`)
+}
+
+function failDesktopAssistantRequest(requestId: string, error: string, phase: string) {
+  const wasActive = desktopAssistantRequests.delete(requestId)
+  desktopAssistantPendingRequests.delete(requestId)
+  if (!wasActive) {
+    describeDesktopAssistantRequest(requestId, `late-timeout-ignored phase=${phase}`)
+    return
+  }
+  if (desktopAssistantDifyRequests.has(requestId)) {
+    cancelDify(requestId)
+  } else if (mainWindow && !mainWindow.isDestroyed()) {
+    // Stop a renderer that ACKed late or is still streaming after the main
+    // watchdog has already reported a visible failure to the floating window.
+    mainWindow.webContents.send('desktop-assistant:cancel', { requestId })
+    describeDesktopAssistantRequest(requestId, 'timeout-cancel-forwarded-to-renderer')
+  }
+  describeDesktopAssistantRequest(requestId, `timeout phase=${phase}`)
+  sendDesktopAssistantMessage({ command: 'actionResult', requestId, ok: false, error })
+}
+
+const desktopAssistantRequestLifecycle = new DesktopAssistantRequestLifecycle<DesktopAssistantRequest>(
+  DESKTOP_ASSISTANT_RENDERER_ACK_TIMEOUT_MS,
+  ({ requestId, phase }) => {
+    const error =
+      phase === 'active'
+        ? '助手执行长时间没有进展，请检查主对话模型或稍后重试。'
+        : '主程序界面未及时接收助手请求，请稍后重试。'
+    failDesktopAssistantRequest(requestId, error, phase)
+  },
+  DESKTOP_ASSISTANT_ACTIVE_IDLE_TIMEOUT_MS
+)
 
 function sendDesktopAssistantCommand(command: string, params?: Record<string, unknown>) {
   if (!desktopAssistantSocket || desktopAssistantSocket.destroyed) {
@@ -179,34 +240,310 @@ function sendDesktopAssistantMessage(message: Record<string, unknown>) {
   return true
 }
 
+function syncDesktopAssistantExecutionMode() {
+  const profileId = getAssistantProfileId()
+  const profileName = profileId ? listDifyProfiles().find((profile) => profile.id === profileId)?.name : undefined
+  sendDesktopAssistantMessage({
+    command: 'executionMode',
+    mode: profileId ? 'dify' : 'chat',
+    label: formatDesktopAssistantExecutionMode(profileName),
+  })
+}
+
+function syncDesktopAssistantHotkey(hotkey = getSettings().shortcuts.selectionAssistant) {
+  sendDesktopAssistantCommand('updateHotkey', { hotkey: hotkey || 'Ctrl+Alt+Space' })
+}
+
+function sendDesktopAssistantRequest(request: DesktopAssistantRequest) {
+  if (!mainWindow || mainWindow.isDestroyed()) return false
+  const tracked = desktopAssistantRequestLifecycle.has(request.requestId)
+    ? desktopAssistantRequestLifecycle.update(request.requestId, request)
+    : desktopAssistantRequestLifecycle.track(request.requestId, request)
+  if (!tracked) return false
+  desktopAssistantPendingRequests.set(request.requestId, request)
+  describeDesktopAssistantRequest(
+    request.requestId,
+    `queued rendererReady=${desktopAssistantRendererReady} completedResult=${request.completedResult !== undefined}`
+  )
+  flushDesktopAssistantRequests()
+  return true
+}
+
+function flushDesktopAssistantRequests() {
+  if (!desktopAssistantRendererReady || !mainWindow || mainWindow.isDestroyed()) return
+  for (const [requestId, request] of desktopAssistantPendingRequests) {
+    if (desktopAssistantPendingRequests.get(requestId) !== request) continue
+    desktopAssistantPendingRequests.delete(requestId)
+    if (!desktopAssistantRequestLifecycle.markSent(requestId)) continue
+    describeDesktopAssistantRequest(requestId, 'sent-awaiting-renderer-ack')
+    mainWindow.webContents.send('desktop-assistant:request', request)
+  }
+}
+
+function isMainRendererSender(event: Electron.IpcMainEvent) {
+  return !!mainWindow && !mainWindow.isDestroyed() && event.sender.id === mainWindow.webContents.id
+}
+
+function markDesktopAssistantRendererReady(event: Electron.IpcMainEvent) {
+  if (!isMainRendererSender(event)) return
+  desktopAssistantRendererReady = true
+  log.info('[NucWise AI] DesktopAssistant renderer ready')
+  flushDesktopAssistantRequests()
+}
+
+function markDesktopAssistantRendererStarted(event: Electron.IpcMainEvent, requestId: unknown) {
+  if (!isMainRendererSender(event)) return
+  const normalizedRequestId = String(requestId || '')
+  if (!normalizedRequestId || !desktopAssistantRequests.has(normalizedRequestId)) return
+  if (desktopAssistantRequestLifecycle.markActive(normalizedRequestId)) {
+    describeDesktopAssistantRequest(normalizedRequestId, 'renderer-ack-active')
+  }
+}
+
+function forwardDesktopAssistantCancel(requestId: string) {
+  if (!requestId || !desktopAssistantRequests.has(requestId)) return
+  if (desktopAssistantDifyRequests.has(requestId)) {
+    cancelDify(requestId)
+    return
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (desktopAssistantPendingRequests.delete(requestId)) {
+    desktopAssistantRequestLifecycle.complete(requestId)
+    desktopAssistantRequests.delete(requestId)
+    describeDesktopAssistantRequest(requestId, 'cancelled-before-renderer-ack')
+    sendDesktopAssistantMessage({ command: 'actionResult', requestId, ok: false, error: '已取消' })
+    return
+  }
+  describeDesktopAssistantRequest(requestId, 'cancel-forwarded-to-renderer')
+  mainWindow.webContents.send('desktop-assistant:cancel', { requestId })
+}
+
+function forwardDesktopAssistantProgress(event: Electron.IpcMainEvent, payload: unknown) {
+  if (!isMainRendererSender(event) || !payload || typeof payload !== 'object') return
+  const data = payload as Partial<DesktopAssistantProgressEvent>
+  const requestId = String(data.requestId || '')
+  if (
+    !requestId ||
+    !desktopAssistantRequests.has(requestId) ||
+    desktopAssistantDifyRequests.has(requestId) ||
+    typeof data.message !== 'string'
+  )
+  {
+    if (requestId && !desktopAssistantRequests.has(requestId)) {
+      describeDesktopAssistantRequest(requestId, 'late-progress-ignored')
+    }
+    return
+  }
+  const activated = desktopAssistantRequestLifecycle.markActive(requestId)
+  if (!activated) desktopAssistantRequestLifecycle.touch(requestId)
+  if (activated) describeDesktopAssistantRequest(requestId, `progress-active messageLength=${data.message.length}`)
+  sendDesktopAssistantMessage({ command: 'actionProgress', requestId, message: data.message })
+}
+
+function forwardDesktopAssistantChunk(event: Electron.IpcMainEvent, payload: unknown) {
+  if (!isMainRendererSender(event) || !payload || typeof payload !== 'object') return
+  const data = payload as Partial<DesktopAssistantChunkEvent>
+  const requestId = String(data.requestId || '')
+  if (
+    !requestId ||
+    !desktopAssistantRequests.has(requestId) ||
+    desktopAssistantDifyRequests.has(requestId) ||
+    typeof data.text !== 'string' ||
+    !data.text
+  )
+  {
+    if (requestId && !desktopAssistantRequests.has(requestId)) {
+      describeDesktopAssistantRequest(requestId, 'late-chunk-ignored')
+    }
+    return
+  }
+  const activated = desktopAssistantRequestLifecycle.markActive(requestId)
+  if (!activated) desktopAssistantRequestLifecycle.touch(requestId)
+  if (activated) describeDesktopAssistantRequest(requestId, `chunk-active textLength=${data.text.length}`)
+  sendDesktopAssistantMessage({ command: 'actionChunk', requestId, text: data.text })
+}
+
+function forwardDesktopAssistantResult(event: Electron.IpcMainEvent, payload: unknown) {
+  if (!isMainRendererSender(event) || !payload || typeof payload !== 'object') return
+  const data = payload as Partial<DesktopAssistantResultEvent>
+  const requestId = String(data.requestId || '')
+  if (
+    !requestId ||
+    !desktopAssistantRequests.has(requestId) ||
+    desktopAssistantDifyRequests.has(requestId) ||
+    typeof data.ok !== 'boolean'
+  )
+  {
+    if (requestId && !desktopAssistantRequests.has(requestId)) {
+      describeDesktopAssistantRequest(requestId, 'late-result-ignored')
+    }
+    return
+  }
+  desktopAssistantRequestLifecycle.complete(requestId)
+  desktopAssistantPendingRequests.delete(requestId)
+  desktopAssistantRequests.delete(requestId)
+  describeDesktopAssistantRequest(
+    requestId,
+    `result ok=${data.ok} resultLength=${typeof data.result === 'string' ? data.result.length : 0} error=${typeof data.error === 'string'}`
+  )
+  sendDesktopAssistantMessage({
+    command: 'actionResult',
+    requestId,
+    ok: data.ok,
+    sessionId: typeof data.sessionId === 'string' ? data.sessionId : undefined,
+    result: typeof data.result === 'string' ? data.result : '',
+    error: typeof data.error === 'string' ? data.error : undefined,
+  })
+}
+
+async function openExternalLink(link: unknown) {
+  if (!isAllowedExternalUrl(link)) {
+    log.warn('[NucWise AI] Blocked unsupported external link')
+    return
+  }
+  try {
+    await shell.openExternal(link)
+  } catch (error) {
+    log.warn('[NucWise AI] Failed to open external link:', error)
+  }
+}
+
 async function handleDesktopAssistantEvent(message: Record<string, unknown>) {
-  if (message.event !== 'runAction' || !mainWindow) return
+  if (!mainWindow) return
+  if (message.event === 'ready' || message.event === 'selectionCaptured') {
+    syncDesktopAssistantExecutionMode()
+    return
+  }
+  if (message.event === 'cancelAction') {
+    const payload =
+      message.payload && typeof message.payload === 'object' ? (message.payload as Record<string, unknown>) : {}
+    forwardDesktopAssistantCancel(String(message.requestId || payload.requestId || ''))
+    return
+  }
+  if (message.event === 'continueInChat') {
+    const payload =
+      message.payload && typeof message.payload === 'object' ? (message.payload as Record<string, unknown>) : {}
+    const text = buildDesktopAssistantComposeText(payload)
+    const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : ''
+    if (!text && !sessionId) return
+    if (!mainWindow.isVisible()) mainWindow.show()
+    mainWindow.focus()
+    mainWindow.webContents.send('desktop-assistant-compose', text, payload)
+    return
+  }
+  if (message.event !== 'runAction') return
   const requestId = String(message.requestId || '')
   const action = (message.action || {}) as Record<string, unknown>
+  const sessionId = typeof message.sessionId === 'string' ? message.sessionId.trim() || undefined : undefined
+  const followupText = String(message.followupText || '').trim()
+  const conversation = Array.isArray(message.conversation) ? message.conversation : []
+  if (!requestId || desktopAssistantRequests.has(requestId)) {
+    sendDesktopAssistantMessage({ command: 'actionResult', requestId, ok: false, error: '无效或重复的助手请求。' })
+    return
+  }
+  desktopAssistantRequests.add(requestId)
+  describeDesktopAssistantRequest(requestId, 'received-runAction')
+  const messages = Array.isArray(message.messages)
+    ? message.messages.flatMap((item) => {
+        if (!item || typeof item !== 'object') return []
+        const value = item as Record<string, unknown>
+        const role = value.role
+        const content = value.content
+        if (!['system', 'user', 'assistant'].includes(String(role)) || typeof content !== 'string') return []
+        return [{ role: role as 'system' | 'user' | 'assistant', content }]
+      })
+    : []
+  const desktopRequest: DesktopAssistantRequest = {
+    requestId,
+    sessionId,
+    text: String(message.text || ''),
+    action,
+    conversation: conversation.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object'),
+    followupText,
+    messages,
+  }
   const profileId = getAssistantProfileId()
   if (!profileId) {
+    if (!desktopAssistantRequestLifecycle.track(requestId, desktopRequest)) {
+      desktopAssistantRequests.delete(requestId)
+      sendDesktopAssistantMessage({ command: 'actionResult', requestId, ok: false, error: '助手请求已在处理中。' })
+      return
+    }
+    if (!sendDesktopAssistantRequest(desktopRequest)) {
+      desktopAssistantRequestLifecycle.complete(requestId)
+      desktopAssistantRequests.delete(requestId)
+      sendDesktopAssistantMessage({
+        command: 'actionResult',
+        requestId,
+        ok: false,
+        error: '主程序界面尚未准备好，请稍后重试。',
+      })
+    }
+    return
+  }
+  // Dify runs in the main process and has its own run/cancel lifecycle. Do
+  // not place it under the renderer ACK watchdog; only the eventual Chat
+  // persistence request is tracked below when a renderer is actually needed.
+  desktopAssistantDifyRequests.add(requestId)
+  sendDesktopAssistantMessage({ command: 'actionProgress', requestId, message: '正在通过统一 Dify 服务执行…' })
+  let userRequest = String(action.user_request || action.label || '')
+  if (followupText) {
+    const transcript = conversation
+      .slice(-8)
+      .map((turn) => {
+        if (!turn || typeof turn !== 'object') return ''
+        const item = turn as Record<string, unknown>
+        if (item.initial_action) return ''
+        const content = String(item.content || '').trim()
+        if (!content) return ''
+        return `${item.role === 'assistant' ? '助手' : '用户'}：${content}`
+      })
+      .filter(Boolean)
+      .join('\n\n')
+      .slice(-12000)
+    userRequest = [
+      `原始操作：${userRequest}`,
+      `原始选中文本：\n${String(message.text || '')}`,
+      `已有对话：\n${transcript || '（无）'}`,
+      `用户追问：${followupText}`,
+      '请基于原始文本和已有对话直接回答这次追问；不要重复输出工作流提示词或说明。',
+    ].join('\n\n')
+  }
+  const inputs: Record<string, unknown> = {
+    Input_Text: String(message.text || ''),
+    user_request: userRequest,
+  }
+  if (action.how_polish) inputs.how_polish = String(action.how_polish)
+  let persistenceQueued = false
+  try {
+    const result = await runDify({ profileId, inputs, runId: requestId }, mainWindow.webContents)
+    if (result.status === 'succeeded' && result.output.trim()) {
+      desktopAssistantDifyRequests.delete(requestId)
+      persistenceQueued = sendDesktopAssistantRequest({ ...desktopRequest, completedResult: result.output })
+      if (persistenceQueued) return
+    }
     sendDesktopAssistantMessage({
       command: 'actionResult',
       requestId,
       ok: false,
-      error: '请先在主程序“设置 → Dify 工作流”中保存一个 Workflow，并设为浮窗助手工作流。',
+      result: result.output,
+      error: result.error || '工作流未返回可保存的文本结果。',
     })
-    return
+  } catch (error) {
+    sendDesktopAssistantMessage({
+      command: 'actionResult',
+      requestId,
+      ok: false,
+      result: '',
+      error: error instanceof Error ? error.message : String(error),
+    })
+  } finally {
+    desktopAssistantDifyRequests.delete(requestId)
+    if (!persistenceQueued) {
+      desktopAssistantRequestLifecycle.complete(requestId)
+      desktopAssistantRequests.delete(requestId)
+    }
   }
-  sendDesktopAssistantMessage({ command: 'actionProgress', requestId, message: '正在通过统一 Dify 服务执行…' })
-  const inputs: Record<string, unknown> = {
-    Input_Text: String(message.text || ''),
-    user_request: String(action.user_request || action.label || ''),
-  }
-  if (action.how_polish) inputs.how_polish = String(action.how_polish)
-  const result = await runDify({ profileId, inputs }, mainWindow.webContents)
-  sendDesktopAssistantMessage({
-    command: 'actionResult',
-    requestId,
-    ok: result.status === 'succeeded',
-    result: result.output,
-    error: result.error,
-  })
 }
 
 async function startDesktopAssistant() {
@@ -239,41 +576,29 @@ async function startDesktopAssistant() {
   }
 
   desktopAssistantServer.on('connection', (socket) => {
-    let authenticated = false
-    let buffer = ''
-    socket.setEncoding('utf8')
-    socket.on('data', (chunk) => {
-      buffer += chunk
-      while (buffer.includes('\n')) {
-        const newline = buffer.indexOf('\n')
-        const line = buffer.slice(0, newline)
-        buffer = buffer.slice(newline + 1)
-        let message: Record<string, unknown>
-        try {
-          message = JSON.parse(line)
-        } catch {
-          socket.destroy()
-          return
-        }
-        if (!authenticated) {
-          if (message.type !== 'hello' || message.token !== controlToken || message.protocol !== 1) {
-            socket.destroy()
-            return
-          }
-          authenticated = true
-          desktopAssistantSocket?.destroy()
-          desktopAssistantSocket = socket
-          log.info('[NucWise AI] Sidecar control channel ready')
-          return
-        }
-        if (message.type === 'event' && message.event === 'selectionCaptured') {
-          log.debug('[NucWise AI] Selection capture completed')
-        }
-        if (message.type === 'event') void handleDesktopAssistantEvent(message)
+    attachDesktopAssistantProtocol(
+      socket,
+      controlToken,
+      () => {
+        desktopAssistantSocket?.destroy()
+        desktopAssistantSocket = socket
+        log.info('[NucWise AI] Sidecar control channel ready')
+        syncDesktopAssistantExecutionMode()
+        syncDesktopAssistantHotkey()
+      },
+      (message) => {
+        void handleDesktopAssistantEvent(message).catch((error) => log.warn('[NucWise AI] Sidecar event failed', error))
       }
-    })
+    )
     socket.on('close', () => {
-      if (desktopAssistantSocket === socket) desktopAssistantSocket = null
+      if (desktopAssistantSocket === socket) {
+        desktopAssistantSocket = null
+        log.info('[NucWise AI] DesktopAssistant sidecar disconnected; clearing request lifecycle')
+        desktopAssistantRequestLifecycle.clear()
+        desktopAssistantRequests.clear()
+        desktopAssistantDifyRequests.clear()
+        desktopAssistantPendingRequests.clear()
+      }
     })
     socket.on('error', (error) => log.warn('[NucWise AI] Control socket error:', error))
   })
@@ -314,6 +639,10 @@ async function startDesktopAssistant() {
 
 function stopDesktopAssistant() {
   desktopAssistantStopping = true
+  desktopAssistantRequestLifecycle.clear()
+  desktopAssistantRequests.clear()
+  desktopAssistantDifyRequests.clear()
+  desktopAssistantPendingRequests.clear()
   sendDesktopAssistantCommand('shutdown')
   if (!desktopAssistantProcess) {
     desktopAssistantServer?.close()
@@ -439,7 +768,10 @@ function createTray() {
     },
     {
       label: '显示划词助手',
-      click: () => sendDesktopAssistantCommand('showAssistant'),
+      click: () => {
+        syncDesktopAssistantExecutionMode()
+        sendDesktopAssistantCommand('showAssistant')
+      },
     },
     {
       label: '捕获当前选区',
@@ -553,6 +885,27 @@ async function createWindow() {
     },
   })
 
+  mainWindow.webContents.on('did-start-navigation', (details) => {
+    if (!isDesktopAssistantRendererReload(details)) return
+    desktopAssistantRendererReady = false
+    const requeued = desktopAssistantRequestLifecycle.requeueSent()
+    for (const [requestId, request] of requeued) {
+      if (!desktopAssistantRequests.has(requestId)) continue
+      desktopAssistantPendingRequests.set(requestId, request)
+      describeDesktopAssistantRequest(requestId, 'renderer-reload-requeued-before-ack')
+    }
+  })
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isSameDocumentNavigation(url, mainWindow?.webContents.getURL() || '')) {
+      event.preventDefault()
+      void openExternalLink(url)
+    }
+  })
+  mainWindow.webContents.on('will-redirect', (event, url) => {
+    if (!isSameDocumentNavigation(url, mainWindow?.webContents.getURL() || '')) event.preventDefault()
+  })
+
   // Load the local URL for development or the local
   // html file for production
   if (!app.isPackaged && process.env['ELECTRON_RENDERER_URL']) {
@@ -619,7 +972,7 @@ async function createWindow() {
 
   // Open urls in the user's browser
   mainWindow.webContents.setWindowOpenHandler((edata) => {
-    shell.openExternal(edata.url)
+    void openExternalLink(edata.url)
     return { action: 'deny' }
   })
 
@@ -840,7 +1193,12 @@ ipcMain.handle('getStoreValue', (event, key) => {
 ipcMain.handle('setStoreValue', (event, key, dataJson) => {
   // 仅在传输层用 JSON 序列化，存储层用原生数据，避免存储层 JSON 损坏后无法自动处理的情况
   const data = JSON.parse(dataJson)
-  return store.set(key, data)
+  const result = store.set(key, data)
+  if (key === 'settings') {
+    syncDesktopAssistantExecutionMode()
+    syncDesktopAssistantHotkey()
+  }
+  return result
 })
 ipcMain.handle('delStoreValue', (event, key) => {
   return store.delete(key)
@@ -904,12 +1262,13 @@ ipcMain.handle('getLocale', () => {
   }
 })
 ipcMain.handle('openLink', (event, link) => {
-  return shell.openExternal(link)
+  return openExternalLink(link)
 })
 ipcMain.handle('ensureShortcutConfig', (event, json) => {
   const config: ShortcutSetting = JSON.parse(json)
   unregisterShortcuts()
   registerShortcuts(config)
+  syncDesktopAssistantHotkey(config.selectionAssistant)
 })
 
 ipcMain.handle('shouldUseDarkColors', () => nativeTheme.shouldUseDarkColors)
@@ -1069,7 +1428,13 @@ ipcMain.handle('window:is-maximized', () => {
   return mainWindow?.isMaximized()
 })
 
+ipcMain.on('desktop-assistant:progress', forwardDesktopAssistantProgress)
+ipcMain.on('desktop-assistant:chunk', forwardDesktopAssistantChunk)
+ipcMain.on('desktop-assistant:result', forwardDesktopAssistantResult)
+ipcMain.on('desktop-assistant:ready', markDesktopAssistantRendererReady)
+ipcMain.on('desktop-assistant:started', markDesktopAssistantRendererStarted)
+
 registerSandboxHandlers()
 registerSkillsHandlers()
 registerOAuthHandlers()
-registerDifyHandlers()
+registerDifyHandlers(syncDesktopAssistantExecutionMode)

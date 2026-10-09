@@ -36,6 +36,7 @@ export {
 export {
   modifyNameAndThreadName,
   modifyThreadName,
+  isAutoTitlePlaceholder,
   scheduleGenerateNameAndThreadName,
   scheduleGenerateThreadName,
 } from './session/naming'

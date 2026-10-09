@@ -41,6 +41,33 @@ describe('buildImportedProviderSettingsUpdate', () => {
     })
   })
 
+  it('restores a hidden Ollama provider and replaces its deleted model list', () => {
+    const update = buildImportedProviderSettingsUpdate({
+      importedConfig: {
+        id: ModelProviderEnum.Ollama,
+        apiHost: 'http://10.0.0.8:11434',
+        apiKey: 'gateway-key',
+        models: [{ modelId: 'qwen3:14b', type: 'chat' }],
+      },
+      existingProvider: null,
+      providers: {},
+      customProviders: [],
+      hiddenProviderIds: [ModelProviderEnum.Ollama, ModelProviderEnum.Claude],
+    })
+
+    expect(update).toEqual({
+      providers: {
+        [ModelProviderEnum.Ollama]: {
+          apiHost: 'http://10.0.0.8:11434',
+          apiPath: '',
+          apiKey: 'gateway-key',
+          models: [{ modelId: 'qwen3:14b', type: 'chat' }],
+        },
+      },
+      hiddenProviderIds: [ModelProviderEnum.Claude],
+    })
+  })
+
   it('adds custom provider base info and dedupes models on insert', () => {
     const update = buildImportedProviderSettingsUpdate({
       importedConfig: {

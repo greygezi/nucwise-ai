@@ -9,6 +9,7 @@ import {
   IconKeyboard,
   IconMessages,
   IconRoute,
+  IconWand,
 } from '@tabler/icons-react'
 import { createFileRoute, Link, Outlet, useCanGoBack, useRouter, useRouterState } from '@tanstack/react-router'
 import clsx from 'clsx'
@@ -41,9 +42,18 @@ const ITEMS = [
     label: '知识库',
     icon: <IconBook2 className="w-full h-full" />,
   },
+  ...(platform.type === 'desktop'
+    ? [
+        {
+          key: 'skills',
+          label: 'Skills',
+          icon: <IconWand className="w-full h-full" />,
+        },
+      ]
+    : []),
   {
     key: 'workflows',
-    label: 'Dify 工作流',
+    label: '划词助手 / Dify',
     icon: <IconRoute className="w-full h-full" />,
   },
   ...(platform.type === 'mobile'

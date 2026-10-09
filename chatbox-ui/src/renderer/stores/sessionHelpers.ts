@@ -600,25 +600,31 @@ export function mergeSettings(
   })
 }
 
+export function resolvePreferredChatModel(
+  defaultChatModel?: { provider: string; model: string },
+  lastUsedChatModel?: { provider: string; modelId: string }
+) {
+  const preferredModel = defaultChatModel || lastUsedChatModel
+  // 旧版本可能保存过 Chatbox AI。新会话不能再继承该失效提供方。
+  if (!preferredModel || preferredModel.provider === 'chatbox-ai') return undefined
+  return 'model' in preferredModel
+    ? { provider: preferredModel.provider, modelId: preferredModel.model }
+    : preferredModel
+}
+
 export function initEmptyChatSession(): Omit<Session, 'id'> {
   const settings = settingsStore.getState().getSettings()
   const { chat: lastUsedChatModel } = lastUsedModelStore.getState()
-  const preferredModel = settings.defaultChatModel || lastUsedChatModel
-  // 旧版本可能保存过 Chatbox AI。新会话不能再继承该失效提供方。
-  const validPreferredModel = preferredModel?.provider === 'chatbox-ai' ? undefined : preferredModel
+  const preferredModel = resolvePreferredChatModel(settings.defaultChatModel, lastUsedChatModel)
   const newSession: Omit<Session, 'id'> = {
     name: 'Untitled',
     type: 'chat',
     messages: [],
     settings: {
       maxContextMessageCount: settings.maxContextMessageCount ?? Number.MAX_SAFE_INTEGER,
-      temperature: settings.temperature || undefined,
-      topP: settings.topP || undefined,
-      ...(validPreferredModel
-        ? 'model' in validPreferredModel
-          ? { provider: validPreferredModel.provider, modelId: validPreferredModel.model }
-          : validPreferredModel
-        : {}),
+      temperature: settings.temperature ?? undefined,
+      topP: settings.topP ?? undefined,
+      ...preferredModel,
     },
   }
   if (settings.defaultPrompt) {
@@ -638,6 +644,21 @@ export function initEmptyPictureSession(): Omit<Session, 'id'> {
       ...lastUsedPictureModel,
     },
   }
+}
+
+export function applySessionSystemPrompt(session: Session, prompt: string): Session {
+  const messages = [...session.messages]
+  const systemIndex = messages.findIndex((message) => message.role === 'system')
+  const trimmed = prompt.trim()
+  if (!trimmed) {
+    return { ...session, messages: messages.filter((message) => message.role !== 'system') }
+  }
+  const systemMessage = createMessage('system', trimmed)
+  if (systemIndex < 0) {
+    return { ...session, messages: [systemMessage, ...messages] }
+  }
+  messages[systemIndex] = { ...messages[systemIndex], contentParts: systemMessage.contentParts }
+  return { ...session, messages }
 }
 
 export function getSessionMeta(session: SessionMeta) {

@@ -1,0 +1,17 @@
+{
+  "id": "ollama",
+  "settings": {
+    "apiHost": "http://127.0.0.1:11434",
+    "apiKey": "",
+    "models": [
+      {
+        "modelId": "qwen3:8b",
+        "type": "chat"
+      },
+      {
+        "modelId": "bge-m3:latest",
+        "type": "embedding"
+      }
+    ]
+  }
+}

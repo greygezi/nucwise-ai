@@ -1,4 +1,4 @@
-import { Button, Flex, PasswordInput, Select, Stack, Text, TextInput } from '@mantine/core'
+import { Button, PasswordInput, Select, Stack, Text, TextInput } from '@mantine/core'
 import { ModelProviderType, type ProviderModelInfo } from '@shared/types'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -20,7 +20,7 @@ export function AddProviderModal({ opened, onClose }: AddProviderModalProps) {
   const [newProviderName, setNewProviderName] = useState('')
   const [newProviderMode, setNewProviderMode] = useState<ModelProviderType>(ModelProviderType.OpenAI)
   const [apiHost, setApiHost] = useState('')
-  const [apiPath, setApiPath] = useState('/v1')
+  const [apiPath, setApiPath] = useState('/chat/completions')
   const [apiKey, setApiKey] = useState('')
   const [modelId, setModelId] = useState('')
   const [modelType, setModelType] = useState<NonNullable<ProviderModelInfo['type']>>('embedding')
@@ -50,16 +50,17 @@ export function AddProviderModal({ opened, onClose }: AddProviderModalProps) {
     onClose()
     setNewProviderName('')
     setApiHost('')
-    setApiPath('/v1')
+    setApiPath('/chat/completions')
     setApiKey('')
     setModelId('')
   }
 
   return (
-    <AdaptiveModal size="sm" opened={opened} onClose={onClose} centered title="统一模型配置">
+    <AdaptiveModal size="sm" opened={opened} onClose={onClose} centered title="新增自定义模型服务">
       <Stack gap="xs">
         <Text size="sm" c="chatbox-tertiary">
-          在此统一维护聊天、Embedding、Rerank 和图像模型服务；每项服务只需配置一次，随后可在对话与知识库中复用。
+          这里与“模型与服务”中的 DeepSeek、Ollama、OpenAI
+          属于同一套配置。仅在服务未预置时新增；已有服务请直接到“模型与服务”中编辑，无需重复创建。
         </Text>
         <Text>{t('Name')}</Text>
         <TextInput
@@ -94,15 +95,16 @@ export function AddProviderModal({ opened, onClose }: AddProviderModalProps) {
         />
         <TextInput
           label="API 服务地址"
-          placeholder="例如：http://127.0.0.1:11434 或 https://api.example.com"
+          description="填写服务基础地址。OpenAI 兼容服务通常需要包含 /v1。"
+          placeholder="例如：http://192.168.1.100:8000/v1"
           value={apiHost}
           onChange={(e) => setApiHost(e.currentTarget.value)}
           required
           error={!apiHost.trim() ? '服务地址是必填项' : ''}
         />
         <TextInput
-          label="接口路径"
-          description="OpenAI 兼容接口通常为 /v1；本地服务可按实际接口调整。"
+          label="对话接口路径"
+          description="仅 Chat 模型使用；Embedding 和 Rerank 会调用各自的标准接口。"
           value={apiPath}
           onChange={(e) => setApiPath(e.currentTarget.value)}
         />

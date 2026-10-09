@@ -1,4 +1,5 @@
 import AutoLaunch from 'auto-launch'
+import path from 'node:path'
 import { getSettings } from './store-node'
 
 // 开机自启动
@@ -6,34 +7,25 @@ let _autoLaunch: AutoLaunch | null = null
 
 export function get() {
   if (!_autoLaunch) {
-    _autoLaunch = new AutoLaunch({ name: 'NucWise AI' })
+    const portableExecutable = process.env.PORTABLE_EXECUTABLE_FILE
+    _autoLaunch = new AutoLaunch({
+      name: 'NucWise AI',
+      ...(portableExecutable && path.isAbsolute(portableExecutable) ? { path: portableExecutable } : {}),
+    })
   }
   return _autoLaunch
 }
 
 export async function sync() {
-  const autoLaunch = get()
-  const settings = getSettings()
-  const isEnabled = await autoLaunch.isEnabled()
-  if (!isEnabled && settings.autoLaunch) {
-    await autoLaunch.enable()
-    return
-  }
-  if (isEnabled && !settings.autoLaunch) {
-    await autoLaunch.disable()
-    return
-  }
+  await ensure(!!getSettings().autoLaunch)
 }
 
 export async function ensure(enable: boolean) {
   const autoLaunch = get()
-  const isEnabled = await autoLaunch.isEnabled()
-  if (!isEnabled && enable) {
+  if (enable) {
+    // Refresh the registered path when the portable EXE has moved.
     await autoLaunch.enable()
-    return
-  }
-  if (isEnabled && !enable) {
+  } else if (await autoLaunch.isEnabled()) {
     await autoLaunch.disable()
-    return
   }
 }

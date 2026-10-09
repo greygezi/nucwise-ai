@@ -2,10 +2,20 @@ import type { BrowserWindow } from 'electron'
 import log from 'electron-log/main'
 
 export function handleDeepLink(mainWindow: BrowserWindow, link: string) {
-  const normalizedLink = link.replace(/^desktopassistant-dev:\/\//, 'desktopassistant://')
-  const url = new URL(normalizedLink)
+  let url: URL
+  try {
+    const normalizedLink = link.replace(/^desktopassistant-dev:\/\//, 'desktopassistant://')
+    url = new URL(normalizedLink)
+  } catch {
+    log.warn('🔗 Ignored malformed deep link')
+    return
+  }
+  if (url.protocol !== 'desktopassistant:') {
+    log.warn('🔗 Ignored unsupported deep link protocol')
+    return
+  }
 
-  log.info('🔗 Parsed URL:', { hostname: url.hostname, pathname: url.pathname, params: url.searchParams.toString() })
+  log.info('🔗 Parsed URL:', { hostname: url.hostname, pathname: url.pathname })
 
   // handle `desktopassistant://mcp/install?server=`
   if (url.hostname === 'mcp' && url.pathname === '/install') {

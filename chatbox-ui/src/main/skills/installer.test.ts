@@ -10,6 +10,9 @@ vi.mock('fs', () => ({
   default: {
     mkdirSync: vi.fn(),
     existsSync: vi.fn(),
+    statSync: vi.fn(),
+    cpSync: vi.fn(),
+    copyFileSync: vi.fn(),
     rmSync: vi.fn(),
     renameSync: vi.fn(),
     writeFileSync: vi.fn(),
@@ -37,7 +40,13 @@ vi.mock('./parser', () => ({
 
 import fs from 'fs'
 import { detectSkillsInRepo, downloadSkillFiles, getLatestCommitHash } from './github-fetcher'
-import { checkForUpdates, deleteSkill, installSkillFromGitHub, installSkillFromMarketplace } from './installer'
+import {
+  checkForUpdates,
+  deleteSkill,
+  importSkillFromPath,
+  installSkillFromGitHub,
+  installSkillFromMarketplace,
+} from './installer'
 import { parseSkillFile } from './parser'
 
 const mockedFs = vi.mocked(fs)
@@ -171,6 +180,41 @@ describe('installer', () => {
       expect(result.success).toBe(true)
       const calledPaths = mockedDownload.mock.calls.map(([, , skillPath]) => skillPath)
       expect(calledPaths[0]).toBe('skills/frontend-design')
+    })
+  })
+
+  describe('importSkillFromPath', () => {
+    it('should import a standard skill directory and preserve its contents', async () => {
+      mockedFs.existsSync.mockImplementation((value) => {
+        const target = String(value).replaceAll('\\', '/')
+        if (target.endsWith('/source/my-skill') || target.endsWith('/source/my-skill/SKILL.md')) return true
+        return false
+      })
+      mockedFs.statSync.mockReturnValue({ isDirectory: () => true } as fs.Stats)
+      mockedParse.mockReturnValue({
+        metadata: { name: 'my-skill', description: 'Imported skill' },
+        body: '# Instructions',
+      })
+
+      const result = await importSkillFromPath('/source/my-skill')
+
+      expect(result).toEqual({ success: true, skillName: 'my-skill' })
+      expect(mockedFs.cpSync).toHaveBeenCalledWith(
+        expect.stringMatching(/source[\\/]+my-skill$/),
+        expect.stringContaining('.tmp-import-'),
+        {
+          recursive: true,
+        }
+      )
+      expect(mockedFs.renameSync).toHaveBeenCalledWith(
+        expect.stringContaining('.tmp-import-'),
+        expect.stringContaining('my-skill')
+      )
+      expect(mockedFs.writeFileSync).toHaveBeenCalledWith(
+        expect.stringContaining('source.json'),
+        expect.stringContaining('"type": "local"'),
+        'utf-8'
+      )
     })
   })
 

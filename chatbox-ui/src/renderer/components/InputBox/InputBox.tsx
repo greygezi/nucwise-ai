@@ -52,6 +52,7 @@ import { useDropzone } from 'react-dropzone'
 import { useTranslation } from 'react-i18next'
 import { v4 as uuidv4 } from 'uuid'
 import { createModelDependencies } from '@/adapters'
+import { subscribeDesktopAssistantCompose } from '@/desktopAssistant'
 import useInputBoxHistory from '@/hooks/useInputBoxHistory'
 import { useKnowledgeBase } from '@/hooks/useKnowledgeBase'
 import { useMessageInput } from '@/hooks/useMessageInput'
@@ -286,13 +287,12 @@ const InputBox = forwardRef<InputBoxRef, InputBoxProps>(
     const [desktopAssistantContext, setDesktopAssistantContext] = useState<string | null>(null)
 
     useEffect(() => {
-      const removeListener = window.electronAPI?.onDesktopAssistantCompose?.((text: string) => {
+      return subscribeDesktopAssistantCompose(({ text }) => {
         if (!text) return
         setDesktopAssistantContext(text)
         messageInputFieldRef.current?.setValue((current) => (current ? `${current}\n\n${text}` : text))
         messageInputFieldRef.current?.getElement()?.focus()
       })
-      return () => removeListener?.()
     }, [])
 
     const debouncedUpdateTimerRef = useRef<ReturnType<typeof setTimeout>>()
@@ -1693,10 +1693,11 @@ const InputBox = forwardRef<InputBoxRef, InputBoxProps>(
                   ))}
 
                 {!isSmallScreen && (
-                  <Tooltip label={t('Conversation Settings')} position="top" withArrow>
+                  <Tooltip label={`Skill · ${t('Conversation Settings')}`} position="top" withArrow>
                     <UnstyledButton
                       onClick={onClickSessionSettings}
                       disabled={!onClickSessionSettings}
+                      aria-label={`Skill · ${t('Conversation Settings')}`}
                       className="flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-[var(--chatbox-background-tertiary)] transition-colors disabled:opacity-50"
                     >
                       <IconAdjustmentsHorizontal
@@ -1704,6 +1705,9 @@ const InputBox = forwardRef<InputBoxRef, InputBoxProps>(
                         strokeWidth={1.8}
                         className="text-[var(--chatbox-tint-secondary)]"
                       />
+                      <Text size="xs" c="dimmed" fw={600}>
+                        Skill
+                      </Text>
                     </UnstyledButton>
                   </Tooltip>
                 )}
@@ -1737,7 +1741,7 @@ const InputBox = forwardRef<InputBoxRef, InputBoxProps>(
                         leftSection={<ScalableIcon icon={IconAdjustmentsHorizontal} size={16} />}
                         onClick={onClickSessionSettings}
                       >
-                        {t('Conversation Settings')}
+                        Skill · {t('Conversation Settings')}
                       </Menu.Item>
                     </Menu.Dropdown>
                   </Menu>

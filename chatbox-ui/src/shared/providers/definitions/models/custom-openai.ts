@@ -30,8 +30,15 @@ export default class CustomOpenAI extends AbstractAISDKModel {
     dependencies: ModelDependencies
   ) {
     super(options, dependencies)
-    const { apiHost, apiPath } = normalizeOpenAIApiHostAndPath(options)
-    this.options = { ...options, apiHost, apiPath }
+    const { apiHost, apiPath } = normalizeOpenAIApiHostAndPath(
+      options,
+      options.model.type === 'embedding' ? { apiPath: '/embeddings' } : undefined
+    )
+    this.options = {
+      ...options,
+      apiHost: options.model.type === 'embedding' ? apiHost.replace(/\/embeddings$/i, '') : apiHost,
+      apiPath,
+    }
   }
 
   protected getCallSettings() {
@@ -68,7 +75,7 @@ export default class CustomOpenAI extends AbstractAISDKModel {
 
   protected getChatModel(options: CallChatCompletionOptions) {
     const { apiHost, apiPath } = this.options
-    const provider = this.getProvider(options, async (_input, init) => {
+    const provider = this.getProvider(options, (_input, init) => {
       return createFetchWithProxy(this.options.useProxy, this.dependencies)(`${apiHost}${apiPath}`, init)
     })
     return wrapLanguageModel({

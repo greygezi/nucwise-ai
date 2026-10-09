@@ -46,11 +46,13 @@ export default class Ollama extends OpenAICompatible {
   public name = 'Ollama'
   public options: OllamaOptions
 
-  constructor(options: Omit<OllamaOptions, 'apiKey' | 'apiHost'>, dependencies: ModelDependencies) {
+  constructor(options: Omit<OllamaOptions, 'apiHost'>, dependencies: ModelDependencies) {
     const apiHost = normalizeOpenAIApiHostAndPath({ apiHost: options.ollamaHost }).apiHost
+    // 官方本机 Ollama 不要求鉴权；远程网关和托管 Ollama 可使用用户配置的 Bearer Key。
+    const apiKey = options.apiKey?.trim() || 'ollama'
     super(
       {
-        apiKey: 'ollama',
+        apiKey,
         apiHost,
         model: options.model,
         temperature: options.temperature,
@@ -63,7 +65,7 @@ export default class Ollama extends OpenAICompatible {
     )
     this.options = {
       ...options,
-      apiKey: 'ollama',
+      apiKey,
       apiHost,
     }
   }

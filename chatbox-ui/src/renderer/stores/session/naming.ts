@@ -9,6 +9,14 @@ import * as chatStore from '../chatStore'
 import { settingsStore } from '../settingsStore'
 import { activeNameGenerations, pendingNameGenerations } from './state'
 
+// 旧版中文界面曾把空白会话保存为“新建对话”。把它视为占位名，
+// 才能让升级后的用户也获得自动摘要标题。
+const AUTO_TITLE_PLACEHOLDERS = new Set(['Untitled', '新建对话', 'New Chat'])
+
+export function isAutoTitlePlaceholder(name?: string) {
+  return AUTO_TITLE_PLACEHOLDERS.has((name || '').trim())
+}
+
 /**
  * Modify session name and thread name
  */
@@ -61,8 +69,25 @@ async function _generateName(sessionId: string, modifyName: (sessionId: string, 
         ?.filter((c) => c.type === 'text')
         .map((c) => c.text)
         .join('') || ''
-    name = name.replace(/['""\u201C\u201D]/g, '').replace(/<think>.*?<\/think>/g, '')
-    await modifyName(sessionId, name)
+    name = name
+      .replace(/['""\u201C\u201D]/g, '')
+      .replace(/<think>.*?<\/think>/g, '')
+      .trim()
+    // 个别本地模型会返回空白或仅输出思考内容。此时用首条用户输入兜底，
+    // 保证侧栏不再堆积“新建对话”，同时不会覆盖用户手动命名的会话。
+    if (!name && isAutoTitlePlaceholder(session.name)) {
+      const firstUserText = session.messages
+        .find((message) => message.role === 'user')
+        ?.contentParts?.filter((part) => part.type === 'text')
+        .map((part) => part.text)
+        .join('')
+        .replace(/\s+/g, ' ')
+        .trim()
+      name = firstUserText ? `${firstUserText.slice(0, 24)}${firstUserText.length > 24 ? '…' : ''}` : ''
+    }
+    if (name) {
+      await modifyName(sessionId, name.slice(0, 48))
+    }
   } catch (e: unknown) {
     if (!(e instanceof ApiError || e instanceof NetworkError)) {
       Sentry.captureException(e)

@@ -1,5 +1,9 @@
 export type DifyAppType = 'workflow' | 'chatflow'
 
+// Stored explicitly so an old installation with no preference can keep its
+// historical first-Workflow fallback while users can opt into default Chat.
+export const DESKTOP_ASSISTANT_DEFAULT_CHAT = '__default_chat__'
+
 export interface DifyProfile {
   id: string
   name: string
@@ -32,6 +36,7 @@ export interface DifyInputField {
 
 export interface DifyRunRequest {
   profileId: string
+  runId?: string
   inputs: Record<string, unknown>
   query?: string
   conversationId?: string

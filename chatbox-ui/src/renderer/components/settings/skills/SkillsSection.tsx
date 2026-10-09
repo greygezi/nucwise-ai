@@ -16,6 +16,7 @@ import type { SkillInfo } from '@shared/types/skills'
 import {
   IconBrandGithub,
   IconDots,
+  IconFileImport,
   IconFolderOpen,
   IconPlus,
   IconRefresh,
@@ -147,7 +148,11 @@ const SectionHeader: FC<{
   </Flex>
 )
 
-const EmptyState: FC<{ onAddClick: () => void; onOpenFolder: () => void }> = ({ onAddClick, onOpenFolder }) => {
+const EmptyState: FC<{ onAddClick: () => void; onImport: () => void; onOpenFolder: () => void }> = ({
+  onAddClick,
+  onImport,
+  onOpenFolder,
+}) => {
   const { t } = useTranslation()
 
   return (
@@ -172,6 +177,14 @@ const EmptyState: FC<{ onAddClick: () => void; onOpenFolder: () => void }> = ({ 
             onClick={onAddClick}
           >
             {t('Browse Skills')}
+          </Button>
+          <Button
+            variant="light"
+            size="xs"
+            leftSection={<ScalableIcon icon={IconFileImport} size={14} />}
+            onClick={onImport}
+          >
+            {t('Import Skill')}
           </Button>
           <Button
             variant="subtle"
@@ -214,7 +227,7 @@ export const SkillsSection: FC = () => {
   }, [])
 
   useEffect(() => {
-    fetchSkills()
+    void fetchSkills()
   }, [fetchSkills])
 
   const originalUserSkillByPath = useMemo(() => {
@@ -248,6 +261,26 @@ export const SkillsSection: FC = () => {
       console.error('Failed to open skills directory:', err)
     }
   }, [])
+
+  const handleImportSkill = useCallback(async () => {
+    try {
+      const result = await skillsController.importSkill()
+      if (result.canceled) return
+      if (!result.success) {
+        toastError(result.error ?? t('Failed to import skill'))
+        return
+      }
+
+      settingsStore.setState((state) => {
+        if (state.skills.enabledSkillNames.includes(result.skillName)) return state
+        return { skills: { ...state.skills, enabledSkillNames: [...state.skills.enabledSkillNames, result.skillName] } }
+      })
+      toast.success(t('Skill imported: {{name}}', { name: result.skillName }))
+      await fetchSkills()
+    } catch (error) {
+      toastError(error instanceof Error ? error.message : t('Failed to import skill'))
+    }
+  }, [fetchSkills, t])
 
   const parseGitHubRepo = useCallback((url: string): { owner: string; repo: string } | null => {
     const trimmed = url.trim()
@@ -342,6 +375,14 @@ export const SkillsSection: FC = () => {
             {t('Add Skills')}
           </Button>
           <Button
+            variant="light"
+            size="xs"
+            leftSection={<ScalableIcon icon={IconFileImport} size={14} />}
+            onClick={() => void handleImportSkill()}
+          >
+            {t('Import Skill')}
+          </Button>
+          <Button
             variant="subtle"
             size="xs"
             color="gray"
@@ -412,7 +453,11 @@ export const SkillsSection: FC = () => {
       />
 
       {userSkills.length === 0 ? (
-        <EmptyState onAddClick={skillsSpotlight.open} onOpenFolder={() => void handleOpenFolder()} />
+        <EmptyState
+          onAddClick={skillsSpotlight.open}
+          onImport={() => void handleImportSkill()}
+          onOpenFolder={() => void handleOpenFolder()}
+        />
       ) : (
         <SimpleGrid type="container" cols={{ base: 1, '450px': 2, '800px': 3, '1200px': 4 }}>
           {userSkills.map((skill) => {

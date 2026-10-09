@@ -1,12 +1,18 @@
 import type { MarketplaceSkill } from '@shared/types/skills'
 import { spawn } from 'child_process'
-import { app, ipcMain, shell } from 'electron'
+import { app, dialog, ipcMain, shell } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import { getLogger } from '../util'
 import { discoverSkills } from './discovery'
 import { detectSkillsInRepo } from './github-fetcher'
-import { checkForUpdates, deleteSkill, installSkillFromGitHub, installSkillFromMarketplace } from './installer'
+import {
+  checkForUpdates,
+  deleteSkill,
+  importSkillFromPath,
+  installSkillFromGitHub,
+  installSkillFromMarketplace,
+} from './installer'
 import { parseSkillFile } from './parser'
 import { isValidSkillName } from './validation'
 
@@ -73,6 +79,24 @@ export function registerSkillsHandlers() {
     } catch (error) {
       log.error('skills:open-directory failed', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  })
+
+  ipcMain.handle('skills:import', async () => {
+    try {
+      const result = await dialog.showOpenDialog({
+        title: 'Import Skill',
+        properties: ['openFile', 'openDirectory'],
+        filters: [{ name: 'Skill files', extensions: ['md'] }],
+      })
+      if (result.canceled || result.filePaths.length === 0) {
+        return { canceled: true, success: false, skillName: '' }
+      }
+
+      return await importSkillFromPath(result.filePaths[0])
+    } catch (error) {
+      log.error('skills:import failed', error)
+      return { success: false, skillName: '', error: error instanceof Error ? error.message : 'Unknown error' }
     }
   })
 

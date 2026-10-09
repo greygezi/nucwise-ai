@@ -1,6 +1,14 @@
 import type { QueryResult } from '@mastra/core/vector'
 import type { RerankerFunctionOptions, RerankResult } from '@mastra/rag/dist/rerank'
-import type { CohereClient } from 'cohere-ai'
+import { CohereClient } from 'cohere-ai'
+
+export function createRerankClient(apiHost: string, token: string) {
+  return new CohereClient({
+    // Cohere SDK appends /v1/rerank itself.
+    environment: apiHost.trim().replace(/\/v1(?:\/rerank)?\/?$/i, ''),
+    token,
+  })
+}
 
 // Takes in a list of results from a vector store and reranks them based on Cohere's rerank API
 export async function rerank(

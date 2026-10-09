@@ -9,9 +9,9 @@ import { ChatboxAIAPIError } from '../../shared/models/errors'
 import { rerank } from '../../shared/models/rerank'
 import type { DocumentParserConfig } from '../../shared/types/settings'
 import { sentry } from '../adapters/sentry'
-import { getLogger } from '../util'
 import { getSettings } from '../store-node'
-import { checkProcessingTimeouts, getDatabase, getVectorStore } from './db'
+import { getLogger } from '../util'
+import { checkProcessingTimeouts, getDatabase, getVectorStore, runVectorWrite } from './db'
 import { getEmbeddingProvider, getRerankProvider } from './model-providers'
 import { getEffectiveParserConfig, type ParserFileMeta, parseFileWithRouter } from './parsers'
 import {
@@ -103,7 +103,15 @@ export async function processFileWithMastra(
     const fileRecord = await db.execute('SELECT chunk_count, total_chunks, status FROM kb_file WHERE id = ?', [
       fileMeta.fileId,
     ])
-    const currentChunkCount = (fileRecord.rows[0]?.chunk_count as number) || 0
+    if (!fileRecord.rows[0]) {
+      log.info(`[FILE] File was removed before processing started: id=${fileMeta.fileId}`)
+      return
+    }
+    if (fileRecord.rows[0].status === 'deleting') {
+      log.info(`[FILE] File deletion is in progress: id=${fileMeta.fileId}`)
+      return
+    }
+    const currentChunkCount = (fileRecord.rows[0].chunk_count as number) || 0
     const currentTotalChunks = (fileRecord.rows[0]?.total_chunks as number) || 0
 
     // 1. Parse file using the parser router
@@ -178,17 +186,23 @@ export async function processFileWithMastra(
       // Embeddings are billable; network-error retries could double-charge.
       maxRetries: 0,
     })
-    await vectorStore.createIndex({ indexName, dimension: firstEmbedding.embeddings[0].length })
+    const canProcess = await runVectorWrite(async () => {
+      const statusCheck = await db.execute('SELECT status FROM kb_file WHERE id = ?', [fileMeta.fileId])
+      const currentStatus = statusCheck.rows[0]?.status as string | undefined
+      if (!currentStatus || currentStatus === 'paused') {
+        return false
+      }
+      await vectorStore.createIndex({ indexName, dimension: firstEmbedding.embeddings[0].length })
+      return true
+    })
+    if (!canProcess) {
+      log.info(`[FILE] File disappeared or was paused before vector indexing: id=${fileMeta.fileId}`)
+      return
+    }
 
     for (let i = 0; i < remainingChunks.length; i += BATCH_SIZE) {
-      // Check if file has been paused before processing each batch
-      const statusCheck = await db.execute('SELECT status FROM kb_file WHERE id = ?', [fileMeta.fileId])
-      const currentStatus = statusCheck.rows[0]?.status as string
-      if (currentStatus === 'paused') {
-        log.info(`[FILE] File processing paused by user: ${fileMeta.filename} (id=${fileMeta.fileId})`)
-        return
-      }
-
+      const status = await db.execute('SELECT status FROM kb_file WHERE id = ?', [fileMeta.fileId])
+      if (!status.rows[0] || status.rows[0].status === 'paused') return
       const batchChunks = remainingChunks.slice(i, i + BATCH_SIZE)
       const batchTexts = batchChunks.map((chunk: any) => `filename: ${fileMeta.filename}\nchunk:\n${chunk.text}`)
 
@@ -212,17 +226,29 @@ export async function processFileWithMastra(
 
       // Store vectors for this batch
       log.debug(`[FILE] Storing batch ${batchNumber}/${totalBatches} to vector store`)
-      await vectorStore.upsert({
-        indexName,
-        vectors: embeddingResult.embeddings,
-        metadata: batchChunks.map((chunk: any, chunkIndex: number) => ({
-          text: chunk.text,
-          fileId: fileMeta.fileId,
-          filename: fileMeta.filename,
-          mimeType: fileMeta.mimeType,
-          chunkIndex: currentChunkCount + i + chunkIndex, // Use absolute chunk index
-        })),
+      const stored = await runVectorWrite(async () => {
+        const statusCheck = await db.execute('SELECT status FROM kb_file WHERE id = ?', [fileMeta.fileId])
+        const currentStatus = statusCheck.rows[0]?.status as string | undefined
+        if (!currentStatus || currentStatus === 'paused') {
+          return false
+        }
+        await vectorStore.upsert({
+          indexName,
+          vectors: embeddingResult.embeddings,
+          metadata: batchChunks.map((chunk: any, chunkIndex: number) => ({
+            text: chunk.text,
+            fileId: fileMeta.fileId,
+            filename: fileMeta.filename,
+            mimeType: fileMeta.mimeType,
+            chunkIndex: currentChunkCount + i + chunkIndex, // Use absolute chunk index
+          })),
+        })
+        return true
       })
+      if (!stored) {
+        log.info(`[FILE] File disappeared or was paused before vector write: id=${fileMeta.fileId}`)
+        return
+      }
 
       // Update processed chunk count in database
       const newChunkCount = currentChunkCount + i + batchChunks.length

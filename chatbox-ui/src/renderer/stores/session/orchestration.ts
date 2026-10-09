@@ -8,9 +8,9 @@ import { t } from 'i18next'
 import { createModel, createModelDependencies } from '@/adapters'
 import { getLogger } from '@/lib/utils'
 import * as appleAppStore from '@/packages/apple_app_store'
+import { DIFY_KNOWLEDGE_BASE_ID, injectDifyKnowledgeContext, runDifyKnowledgeWorkflow } from '@/packages/dify-knowledge'
 import { convertToModelMessages, injectModelSystemPrompt } from '@/packages/model-calls/message-utils'
 import { estimateTokensFromMessages } from '@/packages/token'
-import { DIFY_KNOWLEDGE_BASE_ID, injectDifyKnowledgeContext, runDifyKnowledgeWorkflow } from '@/packages/dify-knowledge'
 import platform from '@/platform'
 import storage from '@/storage'
 import { StorageKeyGenerator } from '@/storage/StoreStorage'
@@ -193,10 +193,14 @@ export async function orchestrateGeneration(
     })
     promptMsgs = updatedMsgs
 
+    const skillSettings = globalSettings.skills
+    const enabledSkillNames = featureFlags.skills ? skillSettings.enabledSkillNames : []
+
     const { tools, instructions } = await buildToolsForSession(model, {
       webBrowsing,
       knowledgeBase,
       messages: promptMsgs,
+      enabledSkillNames,
     })
 
     let injectedMessages = injectModelSystemPrompt(

@@ -14,6 +14,7 @@ const {
   mockGetBlob,
   mockSetItem,
   mockGetItem,
+  settingsState,
 } = vi.hoisted(() => {
   const blobs = new Map<string, string>()
   const license = { key: 'licensed-key' as string | undefined }
@@ -21,6 +22,13 @@ const {
   const authTokens = { hasTokens: true }
   const sessionRagCapability = { enabled: true }
   const parser = { type: 'local' as 'local' | 'chatbox-ai' | 'none' | 'mineru' }
+  const settings = {
+    maxContextMessageCount: 20,
+    temperature: undefined as number | undefined,
+    topP: undefined as number | undefined,
+    defaultChatModel: undefined,
+    defaultPrompt: '',
+  }
 
   return {
     blobStore: blobs,
@@ -44,6 +52,7 @@ const {
     mockGetBlob: vi.fn(async (key: string) => blobs.get(key) ?? null),
     mockSetItem: vi.fn(async () => undefined),
     mockGetItem: vi.fn(async <T>(_key: string, initialValue: T) => initialValue),
+    settingsState: settings,
   }
 })
 
@@ -85,6 +94,7 @@ vi.mock('@/stores/authInfoStore', () => ({
 vi.mock('./settingsStore', () => ({
   settingsStore: {
     getState: () => ({
+      getSettings: () => settingsState,
       licenseKey: licenseState.key,
       licenseActivationMethod: licenseActivationState.method,
       extension: {
@@ -133,9 +143,12 @@ vi.mock('@/stores/chatStore', () => ({
 }))
 
 import {
+  applySessionSystemPrompt,
+  initEmptyChatSession,
   isSessionAttachmentRagAuthError,
   isSessionAttachmentRagIndexingError,
   prepareFileAttachment,
+  resolvePreferredChatModel,
   SESSION_ATTACHMENT_RAG_LARGE_ATTACHMENT_WARNING,
   SESSION_ATTACHMENT_RAG_MAX_PARSED_BYTE_LENGTH,
   SESSION_ATTACHMENT_RAG_REQUIRES_CHATBOX_AI_ERROR,
@@ -158,6 +171,8 @@ describe('preprocessFile local parser fallback', () => {
     authTokensState.hasTokens = true
     sessionRagCapabilityState.enabled = true
     parserState.type = 'local'
+    settingsState.temperature = undefined
+    settingsState.topP = undefined
     mockParseFileLocally.mockReset()
     mockGetSessionRagConfig.mockClear()
     mockUploadAndCreateUserFile.mockReset()
@@ -165,6 +180,41 @@ describe('preprocessFile local parser fallback', () => {
     mockGetBlob.mockClear()
     mockSetItem.mockClear()
     mockGetItem.mockClear()
+  })
+
+  it('preserves explicit zero sampling settings when creating a chat session', () => {
+    settingsState.temperature = 0
+    settingsState.topP = 0
+
+    expect(initEmptyChatSession().settings).toMatchObject({ temperature: 0, topP: 0 })
+  })
+
+  it('keeps fixed skill prompts independent per conversation and supports unloading', () => {
+    const first = { ...initEmptyChatSession(), id: 'first', name: 'First', copilotId: 'skill-a' }
+    const second = { ...initEmptyChatSession(), id: 'second', name: 'Second', copilotId: 'skill-b' }
+
+    const withFirstSkill = applySessionSystemPrompt(first, 'Role A')
+    const withSecondSkill = applySessionSystemPrompt(second, 'Role B')
+
+    expect(withFirstSkill.messages[0]).toMatchObject({ role: 'system', contentParts: [{ text: 'Role A' }] })
+    expect(withSecondSkill.messages[0]).toMatchObject({ role: 'system', contentParts: [{ text: 'Role B' }] })
+    expect(applySessionSystemPrompt(withFirstSkill, '').messages.some((message) => message.role === 'system')).toBe(
+      false
+    )
+  })
+
+  it('resolves the same configured model for new chats and the floating assistant', () => {
+    expect(
+      resolvePreferredChatModel(
+        { provider: 'default-provider', model: 'default-model' },
+        { provider: 'last-provider', modelId: 'last-model' }
+      )
+    ).toEqual({ provider: 'default-provider', modelId: 'default-model' })
+    expect(resolvePreferredChatModel(undefined, { provider: 'last-provider', modelId: 'last-model' })).toEqual({
+      provider: 'last-provider',
+      modelId: 'last-model',
+    })
+    expect(resolvePreferredChatModel({ provider: 'chatbox-ai', model: 'removed' })).toBeUndefined()
   })
 
   it('returns a local parsing error instead of uploading a file to a legacy cloud parser', async () => {

@@ -1,8 +1,10 @@
-import { getModel } from '@shared/models'
+import { getModel, getProviderSettings } from '@shared/models'
+import { createRerankClient } from '@shared/models/rerank'
 import type { CallChatCompletionOptions, ModelInterface } from '@shared/models/types'
-import type { Config, Settings } from '@shared/types'
+import { resolveEffectiveApiKey } from '@shared/oauth'
+import type { Config, ProviderModelInfo, Settings } from '@shared/types'
 import type { ModelDependencies } from '@shared/types/adapters'
-import { jsonSchema, type ToolSet } from 'ai'
+import { type EmbeddingModel, embed, jsonSchema, type ToolSet } from 'ai'
 
 export type TestResult = {
   status: 'success' | 'error' | 'pending'
@@ -19,6 +21,7 @@ export type ModelTestState = {
 export type TestModelOptions = {
   providerId: string
   modelId: string
+  modelType?: ProviderModelInfo['type']
   settings: Settings
   configs: Config
   dependencies: ModelDependencies
@@ -48,32 +51,43 @@ const testWeatherTools: CallChatCompletionOptions['tools'] = {
  * @returns The final test state
  */
 export async function testModelCapabilities(options: TestModelOptions): Promise<ModelTestState> {
-  const { providerId, modelId, settings, configs, dependencies, onStateChange } = options
+  const { providerId, modelId, modelType = 'chat', settings, configs, dependencies, onStateChange } = options
+  const isChatModel = modelType === 'chat'
 
   let state: ModelTestState = {
     testing: true,
     basicTest: { status: 'pending' },
-    visionTest: { status: 'pending' },
-    toolTest: { status: 'pending' },
+    ...(isChatModel && {
+      visionTest: { status: 'pending' as const },
+      toolTest: { status: 'pending' as const },
+    }),
   }
 
   onStateChange?.(state)
 
   try {
-    const modelInstance = getModel({ ...settings, provider: providerId, modelId }, settings, configs, dependencies)
+    let modelInstance: ModelInterface | undefined
+    if (modelType === 'rerank') {
+      state = await testRerankRequest(providerId, modelId, settings, dependencies, state)
+    } else {
+      modelInstance = getModel({ ...settings, provider: providerId, modelId }, settings, configs, dependencies)
 
-    // Test 1: Basic text request
-    state = await testBasicRequest(modelInstance, state)
+      if (modelType === 'embedding') {
+        state = await testEmbeddingRequest(modelInstance, state)
+      } else if (modelType === 'image') {
+        state = await testImageRequest(modelInstance, state)
+      } else {
+        state = await testBasicRequest(modelInstance, state)
+      }
+    }
     onStateChange?.({ ...state })
 
-    // Test 2: Vision request (if basic test passed)
-    if (state.basicTest?.status === 'success') {
+    if (isChatModel && modelInstance && state.basicTest?.status === 'success') {
       state = await testVisionRequest(modelInstance, state)
       onStateChange?.({ ...state })
     }
 
-    // Test 3: Tool use request (if basic test passed)
-    if (state.basicTest?.status === 'success') {
+    if (isChatModel && modelInstance && state.basicTest?.status === 'success') {
       state = await testToolUseRequest(modelInstance, state)
       onStateChange?.({ ...state })
     }
@@ -84,6 +98,61 @@ export async function testModelCapabilities(options: TestModelOptions): Promise<
     onStateChange?.({ ...state })
   }
   return state
+}
+
+async function testEmbeddingRequest(modelInstance: ModelInterface, state: ModelTestState): Promise<ModelTestState> {
+  try {
+    const getEmbeddingModel = (
+      modelInstance as unknown as {
+        getTextEmbeddingModel(options: CallChatCompletionOptions): EmbeddingModel | null
+      }
+    ).getTextEmbeddingModel
+    const embeddingModel = getEmbeddingModel?.call(modelInstance, {})
+    if (!embeddingModel) throw new Error(`Model ${modelInstance.modelId} does not support text embeddings`)
+    await embed({ model: embeddingModel, value: 'NucWise AI connection test' })
+    return { ...state, basicTest: { status: 'success' } }
+  } catch (e: unknown) {
+    return { ...state, basicTest: { status: 'error', error: getErrorMessage(e) } }
+  }
+}
+
+async function testRerankRequest(
+  providerId: string,
+  modelId: string,
+  settings: Settings,
+  dependencies: ModelDependencies,
+  state: ModelTestState
+): Promise<ModelTestState> {
+  try {
+    const sessionSettings = { ...settings, provider: providerId, modelId }
+    const { providerSetting, formattedApiHost } = getProviderSettings(sessionSettings, settings)
+    const token = resolveEffectiveApiKey(providerSetting, dependencies.platformType || 'desktop')
+    if (!token) throw new Error(`Missing API Key for rerank provider: ${providerId}`)
+    const client = createRerankClient(formattedApiHost, token)
+    await client.rerank({
+      model: modelId,
+      query: 'NucWise AI',
+      documents: ['NucWise AI desktop assistant', 'unrelated text'],
+      topN: 1,
+    })
+    return { ...state, basicTest: { status: 'success' } }
+  } catch (e: unknown) {
+    return { ...state, basicTest: { status: 'error', error: getErrorMessage(e) } }
+  }
+}
+
+async function testImageRequest(modelInstance: ModelInterface, state: ModelTestState): Promise<ModelTestState> {
+  try {
+    await modelInstance.paint({ prompt: 'A simple blue circle', num: 1 })
+    return { ...state, basicTest: { status: 'success' } }
+  } catch (e: unknown) {
+    return { ...state, basicTest: { status: 'error', error: getErrorMessage(e) } }
+  }
+}
+
+function getErrorMessage(e: unknown) {
+  const error = e as { responseBody?: string; message?: string }
+  return error?.responseBody || error?.message || String(e)
 }
 
 async function testBasicRequest(modelInstance: ModelInterface, state: ModelTestState): Promise<ModelTestState> {

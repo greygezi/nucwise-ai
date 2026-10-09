@@ -53,4 +53,13 @@ describe('mergeProviderSettings', () => {
       },
     })
   })
+
+  it('starts a recreated Ollama provider with an explicit empty model list', () => {
+    const result = mergeProviderSettings({}, 'ollama', { apiHost: 'http://127.0.0.1:11434' })
+
+    expect(result.providers?.ollama).toEqual({
+      apiHost: 'http://127.0.0.1:11434',
+      models: [],
+    })
+  })
 })

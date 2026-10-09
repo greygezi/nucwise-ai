@@ -1,4 +1,4 @@
-import { Box, Combobox, Flex, Input, InputBase, Kbd, Select, Table, Text, useCombobox } from '@mantine/core'
+import { Box, Combobox, Flex, InputBase, Kbd, Table, Text, useCombobox } from '@mantine/core'
 import {
   type Settings,
   type ShortcutName,
@@ -7,6 +7,7 @@ import {
   shortcutToggleWindowValues,
 } from '@shared/types'
 import { IconAlertHexagon } from '@tabler/icons-react'
+import { type KeyboardEvent as ReactKeyboardEvent, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getOS } from '@/packages/navigator'
 import { ScalableIcon } from './common/ScalableIcon'
@@ -21,6 +22,7 @@ function formatKey(key: string) {
     option: 'Alt',
     alt: 'Alt',
     shift: 'Shift',
+    backquote: '`',
     enter: '⏎',
     tab: 'Tab',
     up: '↑',
@@ -73,8 +75,6 @@ export function Keys(props: {
   onEdit?: () => void
   className?: string
 }) {
-  // const sizeClass = props.size === 'small' ? 'text-[0.55rem]' : 'text-sm'
-  const sizeClass = 'text-xs'
   const opacityClass = props.opacity !== undefined ? `opacity-${props.opacity * 100}` : ''
   return (
     <span className={`inline-block px-1 ${opacityClass} ${props.className || ''}`}>
@@ -93,6 +93,7 @@ type ShortcutDataItem = {
   name?: ShortcutName
   keys: ShortcutSetting[ShortcutName]
   options?: string[]
+  editable?: boolean
 }
 
 export function ShortcutConfig(props: {
@@ -107,6 +108,12 @@ export function ShortcutConfig(props: {
       name: 'quickToggle',
       keys: shortcuts.quickToggle,
       options: shortcutToggleWindowValues,
+    },
+    {
+      label: t('Show/Hide the Selection Assistant'),
+      name: 'selectionAssistant',
+      keys: shortcuts.selectionAssistant,
+      editable: true,
     },
     {
       label: t('Focus on the Input Box'),
@@ -200,11 +207,22 @@ export function ShortcutConfig(props: {
         </Table.Thead>
 
         <Table.Tbody>
-          {items.map(({ name, label, keys, options }) => (
+          {items.map(({ name, label, keys, options, editable }) => (
             <Table.Tr key={`${name}`}>
               <Table.Td>{label}</Table.Td>
               <Table.Td>
-                {options ? (
+                {editable && name ? (
+                  <ShortcutRecorder
+                    value={keys}
+                    onSelect={(val) =>
+                      setShortcuts({
+                        ...shortcuts,
+                        [name]: val,
+                      })
+                    }
+                    isConflict={isConflict(name, keys)}
+                  />
+                ) : options ? (
                   <ShortcutSelect
                     options={options}
                     value={keys}
@@ -227,6 +245,80 @@ export function ShortcutConfig(props: {
         </Table.Tbody>
       </Table>
     </Box>
+  )
+}
+
+function normalizeRecordedKey(key: string) {
+  const names: Record<string, string> = {
+    ' ': 'Space',
+    Escape: 'Esc',
+    Esc: 'Esc',
+    Backspace: 'Backspace',
+    Delete: 'Delete',
+    Insert: 'Insert',
+    Home: 'Home',
+    End: 'End',
+    PageUp: 'PageUp',
+    PageDown: 'PageDown',
+    Tab: 'Tab',
+    Enter: 'Enter',
+    ArrowUp: 'Up',
+    ArrowDown: 'Down',
+    ArrowLeft: 'Left',
+    ArrowRight: 'Right',
+    '`': 'backquote',
+  }
+  if (names[key]) return names[key]
+  if (/^F(?:[1-9]|1[0-9]|2[0-4])$/i.test(key)) return key.toUpperCase()
+  if (key.length === 1 && /[a-z0-9]/i.test(key)) return key.toUpperCase()
+  return ''
+}
+
+function recordedShortcut(event: ReactKeyboardEvent<HTMLButtonElement>) {
+  const key = normalizeRecordedKey(event.key)
+  if (!key) return ''
+  const modifiers = [
+    event.ctrlKey ? 'Ctrl' : '',
+    event.altKey ? 'Alt' : '',
+    event.shiftKey ? 'Shift' : '',
+    event.metaKey ? 'Win' : '',
+  ].filter(Boolean)
+  return [...modifiers, key].join('+')
+}
+
+function ShortcutRecorder({
+  value,
+  onSelect,
+  isConflict,
+}: {
+  value: string
+  onSelect: (value: string) => void
+  isConflict?: boolean
+}) {
+  const [recording, setRecording] = useState(false)
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const shortcut = recordedShortcut(event)
+    if (shortcut) {
+      onSelect(shortcut)
+      setRecording(false)
+    }
+  }
+  return (
+    <InputBase
+      maw={220}
+      component="button"
+      type="button"
+      pointer
+      aria-label="录制划词助手快捷键"
+      onClick={() => setRecording(true)}
+      onFocus={() => setRecording(true)}
+      onBlur={() => setRecording(false)}
+      onKeyDown={handleKeyDown}
+    >
+      {recording ? <Text size="xs">请按下组合键…</Text> : <ShortcutText shortcut={value} isConflict={isConflict} />}
+    </InputBase>
   )
 }
 
